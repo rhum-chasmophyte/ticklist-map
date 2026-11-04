@@ -1,0 +1,19 @@
+{
+ "lat": 68.30257,
+ "lon": 14.17882,
+ "source": "era5land",
+ "sample_lon": 14.178816,
+ "sample_lat": 68.20257400000001,
+ "elev_m": null,
+ "radius_m": null,
+ "z_crag": 10.2,
+ "z_grid": 40.5,
+ "cell": [
+  14.150000000000006,
+  68.14999999999999,
+  14.25,
+  68.25
+ ],
+ "dem": "COPERNICUS/DEM/GLO30_2024_1",
+ "last_date": "2026-10-26"
+}

@@ -1,0 +1,5 @@
+earthengine-api>=1.0
+gspread>=6.0
+google-auth>=2.0
+pandas>=2.2
+numpy>=1.26

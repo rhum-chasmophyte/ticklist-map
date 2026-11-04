@@ -1,0 +1,12 @@
+# Never publish the Google key. Keep it OUTSIDE this folder anyway.
+*key*.json
+service-account*.json
+secrets/
+
+test-output/
+__pycache__/
+*.pyc
+.venv/
+# CSV exports of the Sheet contain Notes and Beta; keep them out of the repo.
+# (The climate cache is .csv.gz, which this doesn't touch.)
+*.csv

@@ -1,0 +1,32 @@
+name: Nightly data refresh
+
+on:
+  schedule:
+    - cron: "17 10 * * *"     # ~3:17 am Denver
+  workflow_dispatch:          # "Run workflow" button for manual refreshes
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Build sends.json
+        env:
+          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+          SHEET_ID: ${{ secrets.SHEET_ID }}
+        run: python -m pipeline.build
+      - name: Commit if changed
+        run: |
+          git config user.name "ticklist-bot"
+          git config user.email "ticklist-bot@users.noreply.github.com"
+          git add docs/data/sends.json cache/
+          git diff --cached --quiet || git commit -m "Nightly data refresh"
+          git push
