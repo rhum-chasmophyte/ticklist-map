@@ -208,11 +208,23 @@ def build(ticklist_raw, crags_raw, fetcher, out_path=C.OUT_PATH):
                 status="ok", source=crag["source"], values=values, pct=pct, typical=typical,
                 tmax_grid=clean_value(row["tmax_grid"]), tmin_grid=clean_value(row["tmin_grid"]))
 
+    # Placeholder dates (a whole trip logged on one day, or year-only Jan 1 entries) would give
+    # every send that day's weather, so they're flagged and kept out of the conditions analysis.
+    per_date = sends["date"].value_counts()
+    approx = set(per_date[per_date > C.APPROX_DATE_MIN_SENDS].index)
+    if C.APPROX_DATE_JAN1:
+        approx |= {d for d in per_date.index if d.month == 1 and d.day == 1}
+    if approx:
+        n = int(sends["date"].isin(approx).sum())
+        print(f"Approximate dates (left out of conditions analysis): {n} sends on "
+              f"{sorted(d.strftime('%Y-%m-%d') for d in approx)}")
+
     send_out = []
     for s in sends.itertuples():
         sid = hashlib.md5(f"{s.date}|{s.name}|{s.crag}".encode()).hexdigest()[:10]
         send_out.append(dict(
             id=sid, date=None if pd.isna(s.date) else s.date.strftime("%Y-%m-%d"),
+            date_approx=bool(pd.notna(s.date) and s.date in approx),
             name=s.name, grade=s.grade, stars=clean_value(s.stars, 0), style=s.style,
             is_fa=bool(s.is_fa),
             sessions=clean_value(s.sessions, 0), points=clean_value(s.points, 1),
@@ -220,14 +232,18 @@ def build(ticklist_raw, crags_raw, fetcher, out_path=C.OUT_PATH):
             country=None if pd.isna(s.country) else s.country,
             climate=climate.get(s.Index, dict(status="no_location"))))
 
+    # One observation per climbing day (crag + date): five sends on one day are one day's weather.
+    days = {}
+    for s in send_out:
+        if s["climate"].get("status") == "ok" and not s["date_approx"]:
+            days[(s["crag_id"], s["date"])] = s["climate"]["pct"]
     summary = {}
     for k in C.VAR_KEYS:
         if not var_meta[k].get("pct", True):
             continue
-        p = [s["climate"]["pct"][k] for s in send_out
-             if s["climate"].get("status") == "ok" and s["climate"]["pct"].get(k) is not None]
+        p = [pct[k] for pct in days.values() if pct.get(k) is not None]
         if p:
-            summary[k] = dict(n=len(p), median_pct=round(float(np.median(p)), 1),
+            summary[k] = dict(n_days=len(p), median_pct=round(float(np.median(p)), 1),
                               ks_p=physics.ks_uniform_p(p))
 
     doc = dict(

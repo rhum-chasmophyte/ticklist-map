@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bouldering Ticklist Map</title>
+<meta name="description" content="Interactive map of bouldering sends with 8a scores by crag, region and country, top problems, first ascents, and the weather conditions on send days.">
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<link rel="stylesheet" href="style.css">
+<script>
+  // ?theme=light or ?theme=dark forces a theme (useful inside an iframe on a light site)
+  (function () {
+    var t = new URLSearchParams(location.search).get("theme");
+    if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+  })();
+</script>
+</head>
+<body>
+<header class="top">
+  <div class="title">
+    <h1>Bouldering ticklist</h1>
+    <p class="sub" id="sub">Loading…</p>
+  </div>
+  <div class="controls" role="group" aria-label="Filters">
+    <div class="seg" role="radiogroup" aria-label="Time period">
+      <button type="button" data-window="all" aria-pressed="true">All-time</button>
+      <button type="button" data-window="1y" aria-pressed="false">Last 365 days</button>
+    </div>
+    <button type="button" class="chip" id="faOnly" aria-pressed="false"><span class="star" aria-hidden="true">★</span> FAs only</button>
+    <div class="seg small" role="radiogroup" aria-label="Temperature unit">
+      <button type="button" data-unit="F" aria-pressed="true">°F</button>
+      <button type="button" data-unit="C" aria-pressed="false">°C</button>
+    </div>
+  </div>
+  <dl class="stats" id="stats"></dl>
+</header>
+
+<main class="layout">
+  <section class="mapwrap" aria-label="Map of crags">
+    <div id="map"></div>
+    <div class="legend" id="legend"></div>
+  </section>
+
+  <aside class="panel" aria-label="Analytics">
+    <div class="scope" id="scope"></div>
+    <nav class="tabs" role="tablist">
+      <button role="tab" type="button" data-tab="top" aria-selected="true">Top 10</button>
+      <button role="tab" type="button" data-tab="fa" aria-selected="false">First ascents</button>
+      <button role="tab" type="button" data-tab="wx" aria-selected="false">Conditions</button>
+    </nav>
+    <div class="tabbody" id="tab-top" role="tabpanel"></div>
+    <div class="tabbody" id="tab-fa" role="tabpanel" hidden></div>
+    <div class="tabbody" id="tab-wx" role="tabpanel" hidden></div>
+  </aside>
+</main>
+
+<footer class="foot" id="foot"></footer>
+<div class="tip" id="tip" role="tooltip" hidden></div>
+
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

@@ -117,7 +117,7 @@ and it's where errors are easiest to read.
 2. Open **PowerShell** (Start menu → type PowerShell).
 3. Go to the folder. Adjust the path to wherever you unzipped it:
    ```powershell
-   cd "C:\Users\richi\OneDrive\Desktop\ticklist-map\ticklist-map"
+   cd "C:\Users\Richard\Dropbox\ticklist-map"
    ```
 4. Install the libraries (one time):
    ```powershell
@@ -125,8 +125,8 @@ and it's where errors are easiest to read.
    ```
 5. Point it at your key and Sheet, then run it:
    ```powershell
-   $env:GOOGLE_APPLICATION_CREDENTIALS = "C:\Users\richi\OneDrive\Desktop\Keys\ee-richiehum-e7b0525bae8e.json"
-   $env:SHEET_ID = "1qXgdS0btxFkB3B4opZ1cbbQjtLiDkC7Qlyz8wEOX26c"
+   $env:GOOGLE_APPLICATION_CREDENTIALS = "C:\Users\Richard\keys\ticklist-bot-key.json"
+   $env:SHEET_ID = "paste-your-sheet-id-here"
    python -m pipeline.build
    ```
    (These two `$env:` lines only last until you close PowerShell. Re-run them in a new window.)
@@ -238,6 +238,42 @@ every night at about 3 am Denver time.
 
 ---
 
+## Part 5 — The map page and Weebly
+
+The page lives in `docs/` (`index.html`, `app.js`, `style.css`) and loads `docs/data/sends.json`.
+Once it's pushed, it's at `https://<username>.github.io/ticklist-map/`. It reads the data fresh on
+every visit, so the nightly run updates it automatically, and the 365-day window rolls forward
+on its own.
+
+### Embed it in Weebly
+
+1. In the Weebly editor, open the page and drag an **Embed Code** element (under *Build*, near the
+   bottom of the element list) to where the map should go.
+2. Click the element → **Edit Custom HTML**, and paste:
+   ```html
+   <iframe src="https://<username>.github.io/ticklist-map/?theme=light"
+           width="100%" height="1050" style="border:0" loading="lazy"
+           title="Bouldering ticklist map"></iframe>
+   ```
+3. Click outside the element and **Publish**. The map won't show inside the editor preview on some
+   plans; check the published page.
+
+`?theme=light` keeps it light to match a light site. Use `?theme=dark` for a dark site, or remove it
+to follow each visitor's system setting. Inside an iframe, the map needs two fingers (or Ctrl + scroll)
+to pan and zoom, so visitors can still scroll past it.
+
+If your Weebly plan doesn't offer Embed Code, use a **Button** element linking to the page instead.
+
+### Approximate dates
+
+A date with more than 20 sends across all crags (a trip logged on one day), or any January 1
+(a year-only entry), is treated as approximate. Those sends count on the map, in the top 10 and in
+scores, but are left out of the conditions analysis, because their weather would belong to the
+wrong day. Change the rule with `APPROX_DATE_MIN_SENDS` and `APPROX_DATE_JAN1` in
+`pipeline/config.py`. Fixing the real dates in the Sheet brings those sends back into the analysis.
+
+---
+
 ## Reference
 
 ### Sheet columns this reads
@@ -263,7 +299,7 @@ every night at about 3 am Denver time.
 | `pipeline/` | The Python code. Settings (lapse rates, baseline years, rain threshold) are in `pipeline/config.py` |
 | `.github/workflows/nightly.yml` | The nightly robot's instructions |
 | `cache/` | Saved daily weather per crag, so each night only fetches new days |
-| `docs/` | The website. `docs/data/sends.json` is the data the map loads |
+| `docs/` | The website: `index.html`, `app.js` (map, panels, charts), `style.css`. `docs/data/sends.json` is the data it loads |
 | `.gitignore` | Stops key files and CSV exports from being uploaded |
 
 ### Method notes
@@ -275,8 +311,9 @@ every night at about 3 am Denver time.
   Specific humidity is held fixed; RH, VPD, dewpoint and dewpoint spread are recalculated at the
   crag. Precipitation and wind are not corrected.
 - **Baseline:** for each send, that crag's days within ±15 days of the same date, 2001–2025.
-  Each variable gets a percentile. The `summary` block holds a test of whether send days differ
-  from typical days that season (a small `ks_p` means they do).
+  Each variable gets a percentile. The test of whether send days differ from typical days
+  (Kolmogorov–Smirnov against an even spread) counts each climbing day (crag + date) once,
+  so five sends on one day are one observation. The page recomputes it for whatever is in view.
 - **ERA5-Land** is land-only, so coastal crags are moved to the nearest grid cell with data.
 - The cache stores uncorrected weather, so changing lapse rates or the baseline in
   `config.py` only needs a rerun, not a re-download.

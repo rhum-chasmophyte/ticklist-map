@@ -19,6 +19,12 @@ WINDOW_DAYS = 15            # +/- days around the send's day of year
 # --- Derived variables ----------------------------------------------------
 RAIN_THRESHOLD_MM = 2.5     # a "meaningful rain" day
 
+# --- Approximate dates ----------------------------------------------------
+# A date with more sends than this (across all crags) is treated as a placeholder,
+# e.g. a whole trip logged on one day. Jan 1 is treated as a year-only entry.
+APPROX_DATE_MIN_SENDS = 20
+APPROX_DATE_JAN1 = True
+
 # --- Lapse-rate correction (deg C per km) ---------------------------------
 LAPSE_TMAX = 6.5
 LAPSE_TMIN = 4.0            # weaker: overnight lows pool in valleys
