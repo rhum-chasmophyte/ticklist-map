@@ -12,6 +12,8 @@
   (function () {
     var t = new URLSearchParams(location.search).get("theme");
     if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+    // ?embed=1: sized to fill an iframe (Weebly embed) instead of scrolling inside it
+    if (new URLSearchParams(location.search).get("embed") === "1") document.documentElement.classList.add("embed");
   })();
 </script>
 </head>
@@ -26,7 +28,8 @@
       <button type="button" data-window="all" aria-pressed="true">All-time</button>
       <button type="button" data-window="1y" aria-pressed="false">Last 365 days</button>
     </div>
-    <button type="button" class="chip" id="faOnly" aria-pressed="false"><span class="star" aria-hidden="true">★</span> FAs only</button>
+    <button type="button" class="chip" id="faOnly" aria-pressed="false"><span class="ring" aria-hidden="true"></span> FAs only</button>
+    <button type="button" class="chip" id="starChip" aria-pressed="false"><span class="stars" aria-hidden="true">★</span> <span id="starChipText">All stars</span></button>
     <div class="seg small" role="radiogroup" aria-label="Temperature unit">
       <button type="button" data-unit="F" aria-pressed="true">°F</button>
       <button type="button" data-unit="C" aria-pressed="false">°C</button>
@@ -46,10 +49,12 @@
     <nav class="tabs" role="tablist">
       <button role="tab" type="button" data-tab="top" aria-selected="true">Top 10</button>
       <button role="tab" type="button" data-tab="fa" aria-selected="false">First ascents</button>
+      <button role="tab" type="button" data-tab="stars" aria-selected="false">Stars</button>
       <button role="tab" type="button" data-tab="wx" aria-selected="false">Conditions</button>
     </nav>
     <div class="tabbody" id="tab-top" role="tabpanel"></div>
     <div class="tabbody" id="tab-fa" role="tabpanel" hidden></div>
+    <div class="tabbody" id="tab-stars" role="tabpanel" hidden></div>
     <div class="tabbody" id="tab-wx" role="tabpanel" hidden></div>
   </aside>
 </main>
