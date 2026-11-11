@@ -8,13 +8,21 @@
     light: "https://tiles.openfreemap.org/styles/positron",
     dark: "https://tiles.openfreemap.org/styles/dark",
   };
-  // Map grouping by zoom: below 2 = globe, 2-4 = nation, 4-6 = state/region, 6+ = crag
-  const LEVELS = [
+  // Map grouping by zoom level. Levels with no data (e.g. no sub-zones) are skipped and the
+  // level above continues further in. From crag level down, a group that spreads wider than
+  // SPLIT_PX on screen splits into its next level (Lofoten's boulders cover a whole island).
+  const ALL_LEVELS = [
     { key: "globe", label: "Globe", below: 2 },
     { key: "nation", label: "Nation", below: 4 },
     { key: "state", label: "State", below: 6 },
-    { key: "crag", label: "Crag", below: Infinity },
+    { key: "crag", label: "Crag", below: 12 },
+    { key: "zone", label: "Zone", below: 14.5 },
+    { key: "subzone", label: "Sub-zone", below: 15.5 },
+    { key: "boulder", label: "Boulder", below: Infinity },
   ];
+  let LEVELS = ALL_LEVELS;
+  const SPLIT_PX = 160;
+  const STAR_STEPS = [5, 4, 3, 2, 1, null];     // the Stars filter: ★5, 4+, 3+, 2+, 1+, All
   const COUNTRY = { US: "United States", CA: "Canada", NO: "Norway", ZA: "South Africa" };
   const DEFAULT_VARS = ["tmax", "rmin", "dewpoint_spread", "days_since_rain"];
   const TEMP_VARS = new Set(["tmax", "tmin", "dewpoint"]);     // °C <-> °F with offset
@@ -45,9 +53,9 @@
   // ---------------------------------------------------------------- state
   const S = {
     window: "all", faOnly: false, unit: "F", tab: "top", mode: "pct",
-    vars: new Set(DEFAULT_VARS), selected: null, level: null,
+    vars: new Set(DEFAULT_VARS), selected: null, level: null, showAll: false, minStars: null, starPage: 1,
   };
-  let D, CRAGS = {}, SENDS = [], VARS = [], map, markers = [], popup = null, today = new Date();
+  let D, CRAGS = {}, ZONES = {}, BOULDERS = {}, HIER = new Set(), SENDS = [], VARS = [], map, markers = [], popup = null, today = new Date();
 
   const $ = (sel, el = document) => el.querySelector(sel);
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -63,6 +71,10 @@
     D = d;
     VARS = d.variables;
     d.crags.forEach((c) => (CRAGS[c.id] = c));
+    const bl = d.boulders || [], zl = d.zones || [];
+    zl.forEach((z) => { ZONES[z.id] = z; HIER.add(z.crag_id); });
+    bl.forEach((b) => { BOULDERS[b.id] = b; HIER.add(b.crag_id); });
+    LEVELS = buildLevels(zl, bl);
     // Approximate dates: use the pipeline's flag; fall back to the same rule for older data
     const perDate = {};
     d.sends.forEach((s) => s.date && (perDate[s.date] = (perDate[s.date] || 0) + 1));
@@ -72,25 +84,58 @@
         const t = s.date ? new Date(s.date + "T12:00:00") : null;
         const approx = s.date_approx ?? (!!s.date && (perDate[s.date] > 20 || s.date.slice(5) === "01-01"));
         const g = parseInt(s.grade, 10);
-        return Object.assign({}, s, { c: CRAGS[s.crag_id], t, approx, g: isNaN(g) ? null : g, pts: s.points || 0 });
+        const c = CRAGS[s.crag_id], b = s.boulder_id ? BOULDERS[s.boulder_id] || null : null;
+        const z = s.zone_id ? ZONES[s.zone_id] || null : null;
+        const p = b || z || c;                                                   // deepest known place
+        return Object.assign({}, s, {
+          c, z, b, t, approx, g: isNaN(g) ? null : g, pts: s.points || 0,
+          st: s.stars != null && s.stars >= 0 ? s.stars : null,                  // quality stars (halves ok)
+          lon: p.lon, lat: p.lat,
+        });
       });
+  }
+
+  function buildLevels(zones, boulders) {
+    const present = {
+      zone: zones.length > 0 || boulders.some((b) => b.zone), subzone: boulders.some((b) => b.subzone),
+      boulder: boulders.length > 0,
+    };
+    const out = [];
+    ALL_LEVELS.forEach((l) => {
+      if (l.key in present && !present[l.key]) { out[out.length - 1].below = l.below; return; }
+      out.push(Object.assign({}, l));
+    });
+    out[out.length - 1].below = Infinity;
+    return out;
   }
 
   function inWindow(s) {
     if (S.window === "all") return true;
     return s.t && today - s.t <= 365 * 864e5;
   }
-  const base = () => SENDS.filter((s) => inWindow(s) && (!S.faOnly || s.is_fa));
+  const starOk = (s) => S.minStars == null || (s.st != null && s.st >= S.minStars);
+  const base = () => SENDS.filter((s) => inWindow(s) && (!S.faOnly || s.is_fa) && starOk(s));
+  const starLabel = (m) => (m == null ? "All" : m === 5 ? "★5" : `${m}+`);
 
   function inView(s) {
     if (!map || map.getZoom() < 2) return true;
-    return map.getBounds().contains([s.c.lon, s.c.lat]);
+    return map.getBounds().contains([s.lon, s.lat]);
   }
 
   const score = (list) => list.map((s) => s.pts).sort((a, b) => b - a).slice(0, 10).reduce((a, b) => a + b, 0);
   const hardest = (list) => list.reduce((m, s) => (s.g != null && s.g > m ? s.g : m), -1);
   const grade = (g) => (g == null || g < 0 ? "–" : "V" + g);
   const tempUnit = () => (S.unit === "F" ? "°F" : "°C");
+  // ★★★½ for 3.5; a real zero shows as 0★ (blank = unrated, shows nothing)
+  function stars(n) {
+    if (n == null) return "";
+    const full = Math.floor(n), half = n - full >= 0.5;
+    const label = `${n} star${n === 1 ? "" : "s"}`;
+    if (!full && !half) return `<span class="stars zero" title="${label}" aria-label="${label}">0★</span>`;
+    return `<span class="stars" title="${label}" aria-label="${label}">${"★".repeat(full)}${half ? "½" : ""}</span>`;
+  }
+  const where = (s) => (s.b ? `${esc(s.b.name)}, ${esc(s.crag)}` : s.z ? `${esc(s.z.name)}, ${esc(s.crag)}` : `${esc(s.crag)}, ${esc(s.state)}`);
+  const levelIdx = (key) => LEVELS.findIndex((l) => l.key === key);
 
   function fmtDate(s) {
     if (!s.date) return "No date";
@@ -115,102 +160,172 @@
   // ---------------------------------------------------------------- map
   function levelFor(z) { return LEVELS.find((l) => z < l.below); }
 
-  function groupKey(c, level) {
-    if (level === "crag") return c.id;
-    if (level === "state") return c.country + "|" + c.state;
-    if (level === "nation") return c.country;
-    return "world";
+  function groupKey(s, level) {
+    const c = s.c, b = s.b;
+    switch (level) {
+      case "globe": return "world";
+      case "nation": return c.country;
+      case "state": return c.country + "|" + c.state;
+      case "crag": return c.id;
+      case "zone": return c.id + "|" + (s.zone_id || "");
+      case "subzone": return c.id + "|" + (s.zone_id || "") + "|" + ((b && b.subzone) || "");
+      default: return c.id + "|" + (s.zone_id || "") + "|" + (b ? b.id : "");
+    }
   }
-  function groupName(c, level) {
-    if (level === "crag") return [c.name, `${c.state}, ${c.country}`];
-    if (level === "state") return [c.state === c.country ? COUNTRY[c.country] || c.country : c.state, COUNTRY[c.country] || c.country];
+  function groupName(s, level) {
+    const c = s.c, z = s.z, b = s.b, place = `${c.state}, ${COUNTRY[c.country] || c.country}`;
+    if (level === "globe") return ["World", ""];
     if (level === "nation") return [COUNTRY[c.country] || c.country, ""];
-    return ["World", ""];
+    if (level === "state") return [c.state === c.country ? COUNTRY[c.country] || c.country : c.state, COUNTRY[c.country] || c.country];
+    if (level === "crag") return [c.name, place];
+    if (level === "zone") return z ? [z.name, c.name] : [c.name, HIER.has(c.id) ? "Zone not recorded" : place];
+    if (level === "subzone") return b && b.subzone ? [b.subzone, [c.name, z && z.name].filter(Boolean).join(" › ")] : z ? [z.name, c.name] : [c.name, place];
+    if (b) return [b.name, [c.name, z && z.name, b.subzone].filter(Boolean).join(" › ")];
+    return z ? [z.name, `${c.name} · boulder not recorded`] : [c.name, HIER.has(c.id) ? "Zone and boulder not recorded" : place];
+  }
+  // where a send is drawn at a level, and whether that spot is only approximate
+  function posAt(s, level) {
+    if (level === "zone") return s.z ? [s.z.lon, s.z.lat] : [s.c.lon, s.c.lat];
+    return [s.lon, s.lat];
+  }
+  function approxAt(s, level) {
+    if (!HIER.has(s.c.id)) return false;          // crag never broken into zones: its point is right
+    if (level === "zone") return !s.z || s.z.pos !== "gps";
+    if (level === "subzone" || level === "boulder") return !s.b || s.b.pos !== "gps";
+    return false;
   }
 
-  function buildGroups(level) {
+  function buildGroups(level, subset = SENDS) {
     const groups = {};
-    D.crags.forEach((c) => {
-      const k = groupKey(c, level);
-      if (!groups[k]) {
-        const [name, sub] = groupName(c, level);
-        groups[k] = { key: k, name, sub, crags: [], sends: [] };
+    // every send defines the groups, so groups emptied by a filter still show (grey)
+    subset.forEach((s) => {
+      const k = groupKey(s, level);
+      let g = groups[k];
+      if (!g) {
+        const [name, sub] = groupName(s, level);
+        g = groups[k] = { key: k, level, name, sub, all: [], sends: [], crags: new Set(), pos: new Map(), in: new Map(), approx: true };
       }
-      groups[k].crags.push(c);
+      g.all.push(s);
+      g.crags.add(s.c);
+      const p = posAt(s, level);
+      g.pos.set(p.join(), p);
+      g.in.set(s.lon + "," + s.lat, [s.lon, s.lat]);
+      if (!approxAt(s, level)) g.approx = false;
     });
-    const byCrag = {};
-    base().forEach((s) => (byCrag[s.crag_id] = byCrag[s.crag_id] || []).push(s));
-    Object.values(groups).forEach((g) => {
-      g.crags.forEach((c) => g.sends.push(...(byCrag[c.id] || [])));
-      g.lon = g.crags.reduce((a, c) => a + c.lon, 0) / g.crags.length;
-      g.lat = g.crags.reduce((a, c) => a + c.lat, 0) / g.crags.length;
+    const inBase = new Set(base());
+    const deep = levelIdx(level) > levelIdx("crag");
+    return Object.values(groups).map((g) => {
+      g.crags = [...g.crags];
+      g.positions = [...g.pos.values()];
+      g.inner = [...g.in.values()];                      // the deepest known spots inside
+      const pts = deep ? g.positions : g.crags.map((c) => [c.lon, c.lat]);
+      g.lon = pts.reduce((a, p) => a + p[0], 0) / pts.length;
+      g.lat = pts.reduce((a, p) => a + p[1], 0) / pts.length;
+      g.sends = g.all.filter((s) => inBase.has(s));
       g.score = score(g.sends);
       g.fa = g.sends.filter((s) => s.is_fa).length;
       g.hardest = hardest(g.sends);
+      return g;
     });
-    return Object.values(groups);
+  }
+
+  function spanPx(points) {
+    if (points.length < 2) return 0;
+    const xy = points.map((p) => map.project(p));
+    const xs = xy.map((p) => p.x), ys = xy.map((p) => p.y);
+    return Math.hypot(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
+  }
+
+  // Groups for the current zoom; from crag level down, wide groups split into the next level
+  function groupsFor(level) {
+    const out = [], iCrag = levelIdx("crag"), last = LEVELS.length - 1;
+    const go = (subset, i) => buildGroups(LEVELS[i].key, subset).forEach((g) => {
+      if (i >= iCrag && i < last && spanPx(g.inner) > SPLIT_PX) go(g.all, i + 1);
+      else out.push(g);
+    });
+    go(SENDS, levelIdx(level));
+    return out;
   }
 
   function renderMarkers() {
     markers.forEach((m) => m.remove());
     markers = [];
-    const level = S.level.key;
-    const groups = buildGroups(level);
+    const groups = groupsFor(S.level.key);
     const max = Math.max(1, ...groups.map((g) => g.score));
-    const selCrag = S.selected && S.selected.c;
     // crags crowd together (Front Range), so their labels wait until zoom 9
-    const showLabels = level !== "crag" || map.getZoom() >= 9;
+    const showLabels = S.level.key !== "crag" || map.getZoom() >= 9;
+    const small = levelIdx(S.level.key) >= levelIdx("crag");
     // biggest first, so small circles sit on top and stay clickable
     groups.sort((a, b) => b.score - a.score).forEach((g) => {
-      const r = g.score > 0 ? (level === "crag" ? 6 + 14 * Math.sqrt(g.score / max) : 9 + 21 * Math.sqrt(g.score / max)) : 5;
+      const r = g.score > 0 ? (small ? 6 + 14 * Math.sqrt(g.score / max) : 9 + 21 * Math.sqrt(g.score / max)) : 5;
       const el = document.createElement("div");
-      el.className = "mk" + (g.score ? "" : " empty") + (g.fa ? " fa" : "") +
-        (selCrag && g.crags.includes(selCrag) ? " sel" : "");
+      const level = g.level, deep = levelIdx(level) > levelIdx("crag");
+      el.className = "mk" + (g.score ? "" : " empty") + (g.fa ? " fa" : "") + (g.approx ? " approx" : "") +
+        (S.selected && g.all.includes(S.selected) ? " sel" : "");
       el.style.width = el.style.height = 2 * r + "px";
-      el.innerHTML = `<div class="dot"></div>${g.fa ? '<span class="fa-badge" aria-hidden="true">★</span>' : ""}` +
+      el.innerHTML = `<div class="dot"></div>${g.fa ? '<span class="fa-badge" aria-hidden="true">FA</span>' : ""}` +
         (showLabels ? `<div class="lbl"><b>${esc(g.name)}</b><br><span>${g.score ? fmt(g.score) : "–"}</span></div>` : "");
       el.setAttribute("role", "button");
       el.setAttribute("aria-label", `${g.name}: 8a score ${fmt(g.score)}, ${g.sends.length} sends`);
+      const splits = g.inner.length > 1 && level !== LEVELS[LEVELS.length - 1].key;
+      const hint = !deep && g.crags.length > 1 ? `${g.crags.length} crags · click to zoom in` : splits ? "Click to zoom in" : "Click to see the problems";
+      const approxNote = g.approx ? `<br><span class="m">Approximate spot: ${level === "zone" ? "no zone position yet" : "no boulder coordinates yet"}</span>` : "";
       el.addEventListener("mouseenter", (e) => showTip(e, `<b>${esc(g.name)}</b>${g.sub ? ` <span class="m">${esc(g.sub)}</span>` : ""}<br>` +
-        `8a score <b>${fmt(g.score)}</b> · ${g.sends.length} sends` + (g.fa ? ` · ★ ${g.fa} FA` : "") +
-        (level !== "crag" ? `<br><span class="m">${g.crags.length} crags · click to zoom in</span>` : "")));
+        `8a score <b>${fmt(g.score)}</b> · ${g.sends.length} sends` + (g.fa ? ` · ${g.fa} FA` : "") +
+        approxNote + `<br><span class="m">${hint}</span>`));
       el.addEventListener("mousemove", moveTip);
       el.addEventListener("mouseleave", hideTip);
       el.addEventListener("click", (e) => { e.stopPropagation(); hideTip(); clickGroup(g, level); });
       markers.push(new maplibregl.Marker({ element: el, anchor: "center" }).setLngLat([g.lon, g.lat]).addTo(map));
+      el.setAttribute("aria-label", `${g.name}: 8a score ${fmt(g.score)}, ${g.sends.length} sends`);   // MapLibre resets it
     });
     renderLegend();
   }
 
   function clickGroup(g, level) {
-    if (level !== "crag") {
-      if (g.crags.length === 1) {
-        map.flyTo({ center: [g.crags[0].lon, g.crags[0].lat], zoom: 9 });
-      } else {
-        const b = new maplibregl.LngLatBounds();
-        g.crags.forEach((c) => b.extend([c.lon, c.lat]));
-        // Fit the group, but always step at least one level deeper (fitting the whole
-        // world, for example, wouldn't change the zoom at all)
-        const i = LEVELS.findIndex((l) => l.key === level);
-        const minZ = LEVELS[i].below + 0.3;
-        const maxZ = LEVELS[i + 1].below === Infinity ? 11 : LEVELS[i + 1].below - 0.3;
-        const cam = map.cameraForBounds(b, { padding: 80 }) || { center: [g.lon, g.lat], zoom: minZ };
-        map.easeTo({ center: cam.center, zoom: Math.min(maxZ, Math.max(minZ, cam.zoom)), duration: 900 });
-      }
+    const i = levelIdx(level), iCrag = levelIdx("crag");
+    // Nothing left to split apart (one spot on the map, or the deepest level): list the problems
+    if (g.inner.length === 1 || i === LEVELS.length - 1) { openPopup(g, level); return; }
+    if (i < iCrag && g.crags.length === 1) {          // one crag: go straight to it
+      map.flyTo({ center: [g.crags[0].lon, g.crags[0].lat], zoom: Math.max(9, LEVELS[i].below + 0.3) });
       return;
     }
-    const c = g.crags[0];
-    const list = g.sends;
+    // Fit the group, but always step at least one level deeper
+    const pts = i >= iCrag ? g.inner : g.crags.map((c) => [c.lon, c.lat]);
+    const b = new maplibregl.LngLatBounds();
+    pts.forEach((p) => b.extend(p));
+    const minZ = i >= iCrag ? Math.min(map.getZoom() + 1, LEVELS[i].below + 0.3) : LEVELS[i].below + 0.3;
+    const maxZ = LEVELS[i + 1].below === Infinity ? 18 : LEVELS[i + 1].below - 0.3;
+    const cam = map.cameraForBounds(b, { padding: 80 }) || { center: [g.lon, g.lat], zoom: minZ };
+    map.easeTo({ center: cam.center, zoom: Math.min(maxZ, Math.max(minZ, cam.zoom)), duration: 900 });
+  }
+
+  function openPopup(g, level) {
+    const c = g.crags.length === 1 ? g.crags[0] : null;
+    const list = [...g.sends].sort((a, b) => (b.g ?? -1) - (a.g ?? -1) || (b.st ?? -1) - (a.st ?? -1) || a.name.localeCompare(b.name));
+    // group the list by boulder when the spot holds more than one (e.g. boulders without GPS)
+    const byB = new Map();
+    list.forEach((s) => { const k = s.b ? s.b.name : ""; (byB.get(k) || byB.set(k, []).get(k)).push(s); });
+    const showHeads = byB.size > 1 || (byB.size === 1 && level !== "boulder" && [...byB.keys()][0]);
+    const row = (s) => `<li><span class="pn">${esc(s.name)}${s.is_fa ? ' <span class="badge fa">FA</span>' : ""}</span>
+        <span class="pg">${grade(s.g)}</span><span class="ps">${stars(s.st)}</span><span class="pd">${fmtDate(s)}</span></li>`;
+    const probs = list.length
+      ? [...byB.entries()].map(([k, ss]) => (showHeads ? `<li class="ph">${esc(k || "Boulder not recorded")}</li>` : "") + ss.map(row).join("")).join("")
+      : `<li class="pe">No sends${S.window === "1y" ? " in the last 365 days" : ""}${S.faOnly ? " (FAs only)" : ""}${S.minStars != null ? ` rated ${starLabel(S.minStars)}` : ""}.</li>`;
+    const approxPos = g.approx;
+    const weather = c && (level === "crag" || !HIER.has(c.id))
+      ? `<div class="note">Weather: ${c.source === "gridmet" ? "gridMET (4 km)" : "ERA5-Land (9 km)"}, lapse-corrected ${c.dz >= 0 ? "+" : ""}${fmt(c.dz)} m from the grid cell's mean elevation.</div>` : "";
     if (popup) popup.remove();
-    popup = new maplibregl.Popup({ offset: 14, maxWidth: "280px" })
-      .setLngLat([c.lon, c.lat])
-      .setHTML(`<div class="pop"><h3>${esc(c.name)}</h3><div class="where">${esc(c.state)}, ${esc(COUNTRY[c.country] || c.country)}</div>
+    popup = new maplibregl.Popup({ offset: 14, maxWidth: "320px" })
+      .setLngLat([g.lon, g.lat])
+      .setHTML(`<div class="pop"><h3>${esc(g.name)}</h3><div class="where">${esc(g.sub)}</div>
         <dl><dt>8a score</dt><dd><b>${fmt(g.score)}</b></dd>
-        <dt>Sends</dt><dd>${list.length}</dd>
+        <dt>Sends</dt><dd>${g.sends.length}</dd>
         <dt>Hardest</dt><dd>${grade(g.hardest)}</dd>
-        <dt>First ascents</dt><dd>${g.fa ? "★ " + g.fa : "–"}</dd>
-        <dt>Elevation</dt><dd>${fmt(c.z_crag)} m</dd></dl>
-        <div class="note">Weather: ${c.source === "gridmet" ? "gridMET (4 km)" : "ERA5-Land (9 km)"}, lapse-corrected ${c.dz >= 0 ? "+" : ""}${fmt(c.dz)} m from the grid cell's mean elevation.</div></div>`)
+        <dt>First ascents</dt><dd>${g.fa || "–"}</dd>
+        ${c ? `<dt>Crag elevation</dt><dd>${fmt(c.z_crag)} m</dd>` : ""}</dl>
+        <h4>Problems</h4><ul class="probs">${probs}</ul>
+        ${approxPos ? `<div class="note">Approximate position: ${level === "zone" ? "this zone has no coordinates yet" : "no coordinates for this boulder yet"}, so it's drawn at the ${level === "zone" ? "crag" : "zone or crag"}.</div>` : ""}${weather}</div>`)
       .addTo(map);
   }
 
@@ -218,9 +333,10 @@
     $("#legend").innerHTML =
       `<div class="levels" aria-label="Grouping level">${LEVELS.map((l) => `<span class="${l.key === S.level.key ? "on" : ""}">${l.label}</span>`).join("")}</div>
        <div class="row"><i style="width:18px;height:18px;background:var(--series);opacity:.8"></i>
-         <span>Size = 8a score (top 10 sends in the group)${S.faOnly ? ", FAs only" : ""}</span></div>
+         <span>Size = 8a score (top 10 sends in the group)${S.faOnly ? ", FAs only" : ""}${S.minStars != null ? `, rated ${starLabel(S.minStars)}` : ""}</span></div>
        <div class="row"><i style="width:12px;height:12px;background:var(--empty)"></i><span>No sends ${S.window === "1y" ? "in the last 365 days" : ""}</span></div>
-       <div class="row"><i style="width:14px;height:14px;border:3px solid var(--accent)"></i><span><span class="star">★</span> Has first ascents</span></div>`;
+       <div class="row"><i style="width:14px;height:14px;border:3px solid var(--accent)"></i><span>Has first ascents (FA)</span></div>
+       ${levelIdx(S.level.key) >= levelIdx("crag") && LEVELS.some((l) => l.key === "boulder") ? `<div class="row"><i style="width:14px;height:14px;border:2px dashed var(--text-2)"></i><span>Approximate spot (no coordinates yet)</span></div>` : ""}`;
   }
 
   function initMap() {
@@ -248,8 +364,8 @@
     renderMarkers();
     map.on("zoomend", () => {
       const l = levelFor(map.getZoom());
-      const namesChanged = S.level.key === "crag" && l.key === "crag";
-      if (l.key !== S.level.key || namesChanged) { S.level = l; renderMarkers(); }
+      const adaptive = levelIdx(l.key) >= levelIdx("crag");
+      if (l.key !== S.level.key || adaptive) { S.level = l; renderMarkers(); }
     });
     let t;
     map.on("moveend", () => { clearTimeout(t); t = setTimeout(renderPanels, 120); });
@@ -269,6 +385,7 @@
     $("#stats").innerHTML = items.map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join("");
     const gen = D.generated ? new Date(D.generated) : null;
     $("#sub").textContent = `${S.window === "1y" ? "Last 365 days" : "All-time"}${S.faOnly ? " · first ascents only" : ""}` +
+      (S.minStars != null ? ` · rated ${starLabel(S.minStars)}` : "") +
       (gen ? ` · updated ${MONTHS[gen.getMonth()]} ${gen.getDate()}, ${gen.getFullYear()}` : "");
   }
 
@@ -285,14 +402,17 @@
     if (r) r.onclick = () => { const b = new maplibregl.LngLatBounds(); D.crags.forEach((c) => b.extend([c.lon, c.lat])); map.fitBounds(b, { padding: 40 }); };
   }
 
-  function sendRow(s, rank, showPts = true) {
+  // right = what the right-hand column shows: "pts", "grade" or "stars"
+  function sendRow(s, rank, right = "pts") {
     const sel = S.selected && S.selected.id === s.id;
-    const badges = (s.is_fa ? `<span class="badge fa">★ FA</span>` : "") + (/flash/i.test(s.style) ? `<span class="badge">Flash</span>` : "");
+    const badges = (s.is_fa ? `<span class="badge fa">FA</span>` : "") + (/flash/i.test(s.style) ? `<span class="badge">Flash</span>` : "");
+    const rightHtml = right === "pts" ? fmt(s.pts) : right === "stars" ? stars(s.st) || "–" : `<span class="grade">${grade(s.g)}</span>`;
+    const meta = [right !== "grade" ? grade(s.g) : null, right !== "stars" ? stars(s.st) : null, where(s), fmtDate(s)].filter(Boolean).join(" · ");
     return `<li class="${sel ? "sel" : ""}"><button type="button" class="item" data-send="${s.id}" aria-expanded="${sel}">
       <span class="rank">${rank}</span>
       <span class="name">${esc(s.name)}${badges}</span>
-      <span class="pts">${showPts ? fmt(s.pts) : `<span class="grade">${grade(s.g)}</span>`}</span>
-      <span class="meta">${showPts ? grade(s.g) + " · " : ""}${esc(s.crag)}, ${esc(s.state)} · ${fmtDate(s)}</span>
+      <span class="pts">${rightHtml}</span>
+      <span class="meta">${meta}</span>
     </button>${sel ? detail(s) : ""}</li>`;
   }
 
@@ -320,24 +440,60 @@
     }));
   }
 
+  const byStars = (a, b) => (b.st ?? -1) - (a.st ?? -1) || (b.g ?? -1) - (a.g ?? -1) || (b.t || 0) - (a.t || 0);
+
   function renderTop(list) {
-    const top = [...list].sort((a, b) => b.pts - a.pts || (b.g ?? -1) - (a.g ?? -1) || (b.t || 0) - (a.t || 0)).slice(0, 10);
     const el = $("#tab-top");
-    if (!top.length) { el.innerHTML = `<p class="empty-note">No sends in this view${S.window === "1y" ? " in the last 365 days" : ""}.</p>`; return; }
-    el.innerHTML = `<p class="lead">Highest-scoring sends in view. Their points sum to the 8a score of <b>${fmt(score(list))}</b>.</p>
-      <ol class="list">${top.map((s, i) => sendRow(s, i + 1)).join("")}</ol>`;
+    const sorted = [...list].sort((a, b) => b.pts - a.pts || (b.g ?? -1) - (a.g ?? -1) || (b.t || 0) - (a.t || 0));
+    const shown = S.showAll ? sorted : sorted.slice(0, 10);
+    el.innerHTML = shown.length
+      ? `<p class="lead">Highest-scoring sends in view. The top 10 sum to the 8a score of <b>${fmt(score(list))}</b>.</p>
+         <ol class="list">${shown.map((s, i) => sendRow(s, i + 1, "pts")).join("")}</ol>` +
+        (sorted.length > 10 ? `<button type="button" class="more" id="showAll">${S.showAll ? "Show top 10" : `Show all ${fmt(sorted.length)}`}</button>` : "")
+      : `<p class="empty-note">No sends in this view${S.window === "1y" ? " in the last 365 days" : ""}${S.minStars != null ? ` rated ${starLabel(S.minStars)}` : ""}.</p>`;
+    const more = $("#showAll", el);
+    if (more) more.onclick = () => { S.showAll = !S.showAll; renderPanels(); };
     bindRows(el);
   }
 
+  // Stars: pick a minimum rating; it filters the map, the scores and every tab
+  function renderStars() {
+    const el = $("#tab-stars");
+    const pool = SENDS.filter((s) => inWindow(s) && (!S.faOnly || s.is_fa) && inView(s));   // ignores the star filter
+    const count = (m) => (m == null ? pool.length : pool.filter((s) => s.st != null && s.st >= m).length);
+    const list = pool.filter(starOk).sort(byStars);
+    const rated = pool.filter((s) => s.st != null).length;
+    const shown = list.slice(0, 100 * S.starPage);
+    const what = S.minStars == null ? `All ${fmt(list.length)} problems in view, best rated first (${fmt(pool.length - rated)} unrated at the end).`
+      : `${fmt(list.length)} problem${list.length === 1 ? "" : "s"} rated ${S.minStars === 5 ? "five stars" : S.minStars + " stars or more"} in view.`;
+    el.innerHTML = `<div class="wx-controls"><div class="seg stars-seg" role="radiogroup" aria-label="Minimum stars">${STAR_STEPS.map((m) =>
+        `<button type="button" data-min="${m ?? ""}" aria-pressed="${S.minStars === m}"><span>${m == null ? "All" : m === 5 ? '<span class="stars">★</span>5' : m + "+"}</span><small>${fmt(count(m))}</small></button>`).join("")}</div></div>
+      <p class="lead">${what} The star filter also applies to the map and the other tabs.</p>` +
+      (shown.length ? `<ol class="list">${shown.map((s, i) => sendRow(s, i + 1, "stars")).join("")}</ol>` : `<p class="empty-note">Nothing rated ${starLabel(S.minStars)} in this view.</p>`) +
+      (list.length > shown.length ? `<button type="button" class="more" id="moreStars">Show ${fmt(Math.min(100, list.length - shown.length))} more of ${fmt(list.length - shown.length)}</button>` : "");
+    el.querySelectorAll("[data-min]").forEach((b) => (b.onclick = () => setMinStars(b.dataset.min === "" ? null : Number(b.dataset.min))));
+    const more = $("#moreStars", el);
+    if (more) more.onclick = () => { S.starPage++; renderPanels(); };
+    bindRows(el);
+  }
+
+  function setMinStars(m) {
+    S.minStars = m; S.starPage = 1;
+    if (S.selected && !starOk(S.selected)) S.selected = null;
+    $("#starChipText").textContent = m == null ? "All stars" : starLabel(m) === "★5" ? "5 stars" : `${m}+ stars`;
+    $("#starChip").setAttribute("aria-pressed", m != null);
+    renderAll();
+  }
+
   function renderFA() {
-    const list = SENDS.filter((s) => s.is_fa && inWindow(s) && inView(s))
+    const list = SENDS.filter((s) => s.is_fa && inWindow(s) && starOk(s) && inView(s))
       .sort((a, b) => (b.g ?? -1) - (a.g ?? -1) || (b.t || 0) - (a.t || 0));
     const el = $("#tab-fa");
     const crags = new Set(list.map((s) => s.crag_id)).size;
     el.innerHTML = `<div class="fa-summary"><div><b>${list.length}</b><span>First ascents</span></div>
         <div><b>${grade(hardest(list))}</b><span>Hardest</span></div><div><b>${crags}</b><span>Crags</span></div></div>
-      <p class="lead">Problems climbed first. <button type="button" class="chip" id="faToggle" aria-pressed="${S.faOnly}"><span class="star">★</span> ${S.faOnly ? "Showing FAs only on the map" : "Show only FAs on the map"}</button></p>` +
-      (list.length ? `<ol class="list">${list.map((s, i) => sendRow(s, i + 1, false)).join("")}</ol>` : `<p class="empty-note">No first ascents in this view.</p>`);
+      <p class="lead">Problems climbed first. <button type="button" class="chip" id="faToggle" aria-pressed="${S.faOnly}"><span class="ring" aria-hidden="true"></span> ${S.faOnly ? "Showing FAs only on the map" : "Show only FAs on the map"}</button></p>` +
+      (list.length ? `<ol class="list">${list.map((s, i) => sendRow(s, i + 1, "grade")).join("")}</ol>` : `<p class="empty-note">No first ascents in this view.</p>`);
     $("#faToggle").onclick = toggleFA;
     bindRows(el);
   }
@@ -559,6 +715,7 @@
     renderScope(list);
     if (S.tab === "top") renderTop(list);
     if (S.tab === "fa") renderFA();
+    if (S.tab === "stars") renderStars();
     if (S.tab === "wx") renderWx(list);
   }
   function renderAll() { renderHeader(); renderMarkers(); renderPanels(); }
@@ -583,10 +740,12 @@
       renderPanels();
     }));
     $("#faOnly").onclick = toggleFA;
+    // the header chip opens the Stars tab (where the rating is picked)
+    $("#starChip").onclick = () => $('[data-tab="stars"]').click();
     document.querySelectorAll("[data-tab]").forEach((b) => (b.onclick = () => {
       S.tab = b.dataset.tab;
       document.querySelectorAll("[data-tab]").forEach((x) => x.setAttribute("aria-selected", x === b));
-      ["top", "fa", "wx"].forEach((t) => ($("#tab-" + t).hidden = t !== S.tab));
+      ["top", "fa", "stars", "wx"].forEach((t) => ($("#tab-" + t).hidden = t !== S.tab));
       renderPanels();
     }));
     let rt;
@@ -594,7 +753,7 @@
   }
 
   function renderFoot() {
-    $("#foot").innerHTML = `8a score: the sum of the 10 highest-scoring sends, using 8a.nu-style points. Map groups crags into regions, countries and the globe as you zoom out.
+    $("#foot").innerHTML = `8a score: the sum of the 10 highest-scoring sends, using 8a.nu-style points. The map groups boulders into zones, crags, regions, countries and the globe as you zoom out.
       Weather: <a href="https://www.climatologylab.org/gridmet.html">gridMET</a> (Abatzoglou 2013) and
       <a href="https://cds.climate.copernicus.eu/datasets/reanalysis-era5-land">ERA5-Land</a> (Copernicus Climate Change Service), via Google Earth Engine.
       Elevation: Copernicus GLO-30 DEM. Basemap: <a href="https://openfreemap.org">OpenFreeMap</a>, © OpenMapTiles, © OpenStreetMap contributors.`;
