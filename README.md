@@ -251,14 +251,15 @@ on its own.
    bottom of the element list) to where the map should go.
 2. Click the element → **Edit Custom HTML**, and paste:
    ```html
-   <iframe src="https://<username>.github.io/ticklist-map/?theme=light"
-           width="100%" height="1050" style="border:0" loading="lazy"
+   <iframe src="https://<username>.github.io/ticklist-map/?embed=1&theme=light"
+           width="100%" height="800" style="border:0;display:block" loading="lazy"
            title="Bouldering ticklist map"></iframe>
    ```
 3. Click outside the element and **Publish**. The map won't show inside the editor preview on some
    plans; check the published page.
 
-`?theme=light` keeps it light to match a light site. Use `?theme=dark` for a dark site, or remove it
+`?embed=1` makes the page fill the frame exactly, so it never scrolls inside its own box; change
+`height` to make it taller or shorter. `?theme=light` keeps it light to match a light site. Use `?theme=dark` for a dark site, or remove it
 to follow each visitor's system setting. Inside an iframe, the map needs two fingers (or Ctrl + scroll)
 to pan and zoom, so visitors can still scroll past it.
 
@@ -274,23 +275,70 @@ wrong day. Change the rule with `APPROX_DATE_MIN_SENDS` and `APPROX_DATE_JAN1` i
 
 ---
 
+## Part 6 — The logging form (Apps Script)
+
+The form's code is in `apps-script/`. It doesn't run on GitHub; it lives in your Sheet.
+
+1. Open the Sheet → **Extensions → Apps Script**.
+2. Open `Code.gs`, select everything, and paste the contents of `apps-script/Code.gs` over it.
+3. Open `Index.html` the same way and paste `apps-script/Index.html` over it.
+4. Click **Save** (the disk icon).
+5. **Deploy → Manage deployments** → the pencil icon on your existing deployment →
+   **Version: New version** → **Deploy**. Your form's web address stays the same. If you skip
+   this step, the old form keeps running.
+6. **One-time date fix:** the old form saved dates as 23:00 the day before. In the toolbar's
+   function list choose `fixEntryDates` and click **Run**. It moves every date in Entries to
+   midnight on the intended day and logs how many it changed. Running it again changes nothing.
+
+What the form does now:
+
+- Dropdowns cascade Nation → State → Crag → Zone → Boulder, built from everything in the Ticklist
+  and Boulder Locations. Each level has **+ New…**. Zone and Boulder can be left as "not sure".
+- Picking a boulder with Zone left blank fills in that boulder's zone.
+- For a **new boulder**, or a listed one without coordinates, a map appears. Tap the spot,
+  press **Use my location**, or paste "lat, lon" (in Google Maps: long-press the spot and tap
+  the coordinates to copy them). Your other boulders at the crag show as green dots.
+- On **Log climb**, the climb goes to Entries (each value under its matching header), and the
+  boulder is added to Boulder Locations, or gets its coordinates filled in if it was listed
+  without them. A new boulder with no location is still added, with x/y blank, as a reminder.
+- Stars take halves (tap 3, then +½). Place selections stay put for logging several problems.
+
+If **Use my location** says the browser blocked it, your phone or Google's page settings aren't
+sharing location with the form; tapping the map or pasting coordinates always works.
+
 ## Reference
 
 ### Sheet columns this reads
 
-**Ticklist:** `Date`, `Grade`, `Stars`, `Name`, `Crag`, `State`, `NumberSessions`, `Notes`,
-`Beta`, `Style`, `8a points`, `Year`. Notes and Beta are read but never published.
-"FA" or "First Ascent" anywhere in Style marks a first ascent.
+**Ticklist:** `Date`, `Grade`, `Stars`, `Name`, `Boulder`, `Zone`, `Crag`, `State`, `Nation`,
+`NumberSessions`, `Notes`, `Beta`, `Style`. Columns are found by header name, so their order and
+any extra columns (like `Location`) don't matter. Notes and Beta are read but never published.
 
-**Crag Locations:**
+- Rows with no Grade (day logs) are skipped.
+- Stars can be halves (3.5). Blank means unrated, which is different from 0.
+- "FA" or "First Ascent" anywhere in Style marks a first ascent.
+- Points are calculated from Grade and Style (450 + 50 per V-grade; Flash +53, First Ascent +33,
+  Second Go +2, Repetition −1). An `8a points` column, if present, is used instead.
+
+**Boulder Locations:** `Nation`, `State`, `Crag`, `Zone`, `Boulder`, `x` (longitude), `y` (latitude).
+A row with Boulder blank is a pin for the zone itself. Boulders are matched to the Ticklist on
+State + Crag + Zone + Boulder (spelling must match; capitals don't matter). A boulder named in the
+Ticklist but missing here, or here without x/y, is drawn at its zone, then its crag, on a dashed
+"approximate" marker. The run log lists those, so you know what's left to place.
+
+**Crag Locations** (now optional for crags that have boulder coordinates):
 
 | Column | Required | Meaning |
 |---|---|---|
 | `Crag`, `State` | yes | Must match the Ticklist exactly; the pair is the join key |
 | `Country` | yes | Two-letter code: US, CA, NO, ZA |
-| `Lat`, `Lon` | yes | Decimal degrees. Centre of the boulders you've climbed, not the parking lot |
+| `Lat`, `Lon` | yes | Decimal degrees. Used only for crags with no boulder coordinates |
 | `Elev_m` | no | Typical boulder elevation in metres; overrides the DEM |
 | `Radius_m` | no | Spread of the area; crag elevation becomes the DEM average within it |
+
+A crag with boulder coordinates is placed at their centre, and its elevation (for the weather
+correction) is the DEM average over those boulders. Its downloaded weather is kept as long as
+that centre stays in the same weather grid cell; otherwise only that crag is re-downloaded.
 
 ### What's in the folder
 
@@ -300,6 +348,7 @@ wrong day. Change the rule with `APPROX_DATE_MIN_SENDS` and `APPROX_DATE_JAN1` i
 | `.github/workflows/nightly.yml` | The nightly robot's instructions |
 | `cache/` | Saved daily weather per crag, so each night only fetches new days |
 | `docs/` | The website: `index.html`, `app.js` (map, panels, charts), `style.css`. `docs/data/sends.json` is the data it loads |
+| `apps-script/` | The logging form (`Code.gs`, `Index.html`), pasted into the Sheet's Apps Script editor |
 | `.gitignore` | Stops key files and CSV exports from being uploaded |
 
 ### Method notes
@@ -323,7 +372,7 @@ wrong day. Change the rule with `APPROX_DATE_MIN_SENDS` and `APPROX_DATE_JAN1` i
 Export both tabs as CSV, put them in this folder, and run:
 
 ```powershell
-python -m pipeline.build --ticklist-csv ticklist.csv --crags-csv crags.csv --fake-climate
+python -m pipeline.build --ticklist-csv ticklist.csv --crags-csv crags.csv --boulders-csv boulders.csv --fake-climate
 ```
 
 This uses made-up weather to check matching and formatting. Results go to a separate
