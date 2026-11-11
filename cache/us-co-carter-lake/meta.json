@@ -1,12 +1,11 @@
 {
- "lat": 40.32213,
- "lon": -105.21384,
+ "lat": 40.32209,
+ "lon": -105.21435,
  "source": "gridmet",
  "sample_lon": -105.213839,
  "sample_lat": 40.32213,
  "elev_m": null,
  "radius_m": null,
- "z_crag": 1766.8,
  "z_grid": 1760.3,
  "cell": [
   -105.23467218361479,
@@ -15,5 +14,7 @@
   40.342963183614806
  ],
  "dem": "COPERNICUS/DEM/GLO30_2024_1",
- "last_date": "2026-11-03"
+ "last_date": "2026-11-08",
+ "pts_hash": "9050b76ca5",
+ "z_crag": 1749.4
 }
