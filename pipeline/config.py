@@ -10,6 +10,13 @@ OUT_PATH = ROOT / "docs" / "data" / "sends.json"  # what the web page loads
 GEE_PROJECT = os.environ.get("GEE_PROJECT", "ee-richiehum")
 TICKLIST_TAB = "Ticklist"
 CRAGS_TAB = "Crag Locations"
+# Boulder Locations: Nation, State, Crag, Zone, Boulder, x (lon), y (lat). Optional: Subzone.
+# A row with Boulder blank is a zone pin. The first tab name that exists is used.
+BOULDERS_TABS = ["Boulder Locations", "Boulders"]
+BOULDER_FAR_KM = 25          # ignore a boulder point this far from the rest of its crag
+# Place each crag at the centre of its georeferenced boulders (more accurate than a rough pin).
+# Crags with no boulder coordinates use their Crag Locations row.
+CRAG_POINT_FROM_BOULDERS = True
 
 # --- Baseline: same crag, same time of year -------------------------------
 BASELINE_START = 2001

@@ -229,8 +229,10 @@ def cell_bounds(source, lon, lat):
     return [lon - h, lat - h, lon + h, lat + h]
 
 
-def elevations(source, sample_lon, sample_lat, crag_lon, crag_lat, elev_override=None, radius_m=None):
-    """Returns (z_crag, z_grid, cell_bounds)."""
+def elevations(source, sample_lon, sample_lat, crag_lon, crag_lat, elev_override=None,
+               radius_m=None, points=None):
+    """Returns (z_crag, z_grid, cell_bounds). z_crag: Elev_m if given; else the DEM mean within
+    Radius_m; else the DEM mean over the crag's boulders (points); else the DEM at the crag point."""
     ee = _ee
     dem = _dem()
     bounds = cell_bounds(source, sample_lon, sample_lat)
@@ -242,6 +244,8 @@ def elevations(source, sample_lon, sample_lat, crag_lon, crag_lat, elev_override
         geom = ee.Geometry.Point(crag_lon, crag_lat)
         if radius_m:
             geom = geom.buffer(float(radius_m))
+        elif points:
+            geom = ee.Geometry.MultiPoint([list(p) for p in points[:500]])
         z_crag = dem.reduceRegion(ee.Reducer.mean(), geom, C.DEM_SCALE_CRAG,
                                   maxPixels=1e8).get("DEM").getInfo()
     if z_grid is None:          # cell is mostly sea in the DEM

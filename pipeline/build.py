@@ -1,7 +1,7 @@
 """Build docs/data/sends.json from the Sheet + Earth Engine.
 
     python -m pipeline.build                          # live: Sheet + GEE (needs SHEET_ID)
-    python -m pipeline.build --ticklist-csv t.csv --crags-csv c.csv   # from CSV exports
+    python -m pipeline.build --ticklist-csv t.csv --crags-csv c.csv --boulders-csv b.csv  # CSVs
     python -m pipeline.build ... --fake-climate       # offline test, synthetic weather
 """
 import argparse
@@ -53,22 +53,29 @@ def update_crag(crag, start, fetcher):
     cache = CragCache(crag["id"])
     meta, daily = cache.load()
     loc = dict(lat=round(crag["lat"], 5), lon=round(crag["lon"], 5), source=crag["source"])
+    pts = [[round(a, 5), round(b, 5)] for a, b in (crag.get("points") or [])]
     elev = dict(elev_m=None if pd.isna(crag["elev_m"]) else float(crag["elev_m"]),
-                radius_m=None if pd.isna(crag["radius_m"]) else float(crag["radius_m"]))
+                radius_m=None if pd.isna(crag["radius_m"]) else float(crag["radius_m"]),
+                pts_hash=hashlib.md5(json.dumps(pts).encode()).hexdigest()[:10])
 
-    if any(meta.get(k) != v for k, v in loc.items()):            # moved pin: start over
-        meta, daily = dict(loc), pd.DataFrame()
-        pt = fetcher.sample_point(crag["source"], crag["lon"], crag["lat"])
-        if pt is None:
-            print(f"  ! {crag['crag']}: no {crag['source']} data near this point")
-            return None, None
-        meta["sample_lon"], meta["sample_lat"] = pt
+    if any(meta.get(k) != v for k, v in loc.items()):
+        if (meta.get("source") == crag["source"] and meta.get("cell") and not daily.empty
+                and in_cell(meta["cell"], crag["lon"], crag["lat"])):
+            meta.update(loc)        # moved within the same weather grid cell: keep the weather
+            meta.pop("z_crag", None)
+        else:                       # moved to another cell (or new crag): start over
+            meta, daily = dict(loc), pd.DataFrame()
+            pt = fetcher.sample_point(crag["source"], crag["lon"], crag["lat"])
+            if pt is None:
+                print(f"  ! {crag['crag']}: no {crag['source']} data near this point")
+                return None, None
+            meta["sample_lon"], meta["sample_lat"] = pt
     dem = fetcher.dem_asset()
     if (any(meta.get(k) != v for k, v in elev.items()) or "z_crag" not in meta
             or meta.get("dem") != dem):
         z_crag, z_grid, cell = fetcher.elevations(
             crag["source"], meta["sample_lon"], meta["sample_lat"],
-            crag["lon"], crag["lat"], elev["elev_m"], elev["radius_m"])
+            crag["lon"], crag["lat"], elev["elev_m"], elev["radius_m"], pts or None)
         meta.update(elev, z_crag=round(z_crag, 1), z_grid=round(z_grid, 1), cell=cell, dem=dem)
         cache.save(meta, daily)
 
@@ -91,6 +98,11 @@ def update_crag(crag, start, fetcher):
     meta["last_date"] = daily.index.max().strftime("%Y-%m-%d") if len(daily) else None
     cache.save(meta, daily)
     return meta, daily
+
+
+def in_cell(cell, lon, lat, tol=1e-6):
+    w, s, e, n = cell
+    return w - tol <= lon <= e + tol and s - tol <= lat <= n + tol
 
 
 # --- Fetchers ------------------------------------------------------------------
@@ -122,9 +134,10 @@ class FakeFetcher:
     def dem_asset(self):
         return "fake-dem"
 
-    def elevations(self, source, slon, slat, lon, lat, elev, radius):
+    def elevations(self, source, slon, slat, lon, lat, elev, radius, points=None):
         z_crag = elev if elev is not None else 1500 + 400 * np.sin(lat + lon)
-        return float(z_crag), float(z_crag + 250), [lon - .02, lat - .02, lon + .02, lat + .02]
+        h = 0.02 if source == "gridmet" else 0.05
+        return float(z_crag), float(z_crag + 250), [slon - h, slat - h, slon + h, slat + h]
 
     def daily(self, source, lon, lat, a, b):
         end = min(b, TODAY - pd.Timedelta(days=6 if source == "era5land" else 1))
@@ -155,17 +168,132 @@ def clean_value(v, nd=2):
     return round(float(v), nd)
 
 
-def build(ticklist_raw, crags_raw, fetcher, out_path=C.OUT_PATH):
+def _haversine_km(lat1, lon1, lat2, lon2):
+    p1, p2 = np.radians(lat1), np.radians(lat2)
+    a = (np.sin((p2 - p1) / 2) ** 2
+         + np.cos(p1) * np.cos(p2) * np.sin(np.radians(lon2 - lon1) / 2) ** 2)
+    return 6371 * 2 * np.arcsin(np.sqrt(a))
+
+
+def build_crags(sends, pins, bl):
+    """One row per crag that has sends. Position: centre of its georeferenced boulders
+    (CRAG_POINT_FROM_BOULDERS), else its Crag Locations pin. Also drops boulder points that
+    sit far from the rest of their crag (swapped x/y, missing minus sign)."""
+    pins = pins.set_index("join")
+    bl = bl.copy()
+    far = []
+    for j, grp in bl[bl["lat"].notna()].groupby("join"):
+        ref = ((pins.loc[j, "lat"], pins.loc[j, "lon"]) if j in pins.index
+               else (grp["lat"].median(), grp["lon"].median()))
+        d = _haversine_km(ref[0], ref[1], grp["lat"].values, grp["lon"].values)
+        bad = grp.index[d > C.BOULDER_FAR_KM]
+        far += [(bl.loc[i, "crag"], bl.loc[i, "boulder"] or bl.loc[i, "zone"]) for i in bad]
+        bl.loc[bad, ["lat", "lon"]] = np.nan
+    if far:
+        print(f"WARNING: {len(far)} boulder points are more than {C.BOULDER_FAR_KM} km from the "
+              f"rest of their crag and are ignored (swapped x/y or a missing minus sign?): {far[:10]}")
+
+    rows, missing = [], []
+    for j, cs in sends.groupby("join", sort=False):
+        pin = pins.loc[j] if j in pins.index else None
+        pts = bl[(bl["join"] == j) & bl["lat"].notna()]
+        nation = cs["nation"][cs["nation"] != ""]
+        bnation = bl.loc[(bl["join"] == j) & (bl["nation"] != ""), "nation"]
+        country = (pin["country"] if pin is not None and pin["country"] else
+                   nation.mode().iloc[0] if len(nation) else
+                   bnation.mode().iloc[0] if len(bnation) else "")
+        row = dict(crag=pin["crag"] if pin is not None else cs["crag"].iloc[0],
+                   state=pin["state"] if pin is not None else cs["state"].iloc[0],
+                   country=country, join=j, points=None,
+                   elev_m=pin["elev_m"] if pin is not None else np.nan,
+                   radius_m=pin["radius_m"] if pin is not None else np.nan)
+        if C.CRAG_POINT_FROM_BOULDERS and len(pts):
+            row.update(lat=float(pts["lat"].mean()), lon=float(pts["lon"].mean()), pos="boulders",
+                       points=sorted({(float(x), float(y)) for x, y in zip(pts["lon"], pts["lat"])}))
+        elif pin is not None:
+            row.update(lat=float(pin["lat"]), lon=float(pin["lon"]), pos="pin")
+        else:
+            missing.append((cs["crag"].iloc[0], cs["state"].iloc[0], len(cs)))
+            continue
+        if not country:
+            print(f"WARNING: no Nation for {row['crag']} ({row['state']}); using ERA5-Land weather")
+        rows.append(row)
+    if missing:
+        print(f"WARNING: no location for these crags (add a Crag Locations row or boulder x/y), "
+              f"their sends are left off the map: {missing}")
+    return pd.DataFrame(rows), bl
+
+
+def resolve_places(sends, crags, bl):
+    """Zones and boulders for the sends, each with a position and how it was found.
+    Returns (zones, boulders, {send index: (zone_id, boulder_id)})."""
+    crag_of = crags.set_index("join")
+    key = lambda v: str(v).strip().casefold()
+    tab_b = bl[bl["boulder"] != ""]
+    full = {k: i for i, k in tab_b["bkey"].items()}
+    by_name = tab_b.groupby("bkey2").groups
+
+    # zone points: an explicit zone row (Boulder blank) wins, else the mean of its boulders
+    zone_pin = bl[(bl["boulder"] == "") & bl["lat"].notna()].groupby("zkey")[["lat", "lon"]].first()
+    zone_avg = tab_b[tab_b["lat"].notna()].groupby("zkey")[["lat", "lon"]].mean()
+
+    zones, boulders, place, not_in_tab = {}, {}, {}, set()
+    for s in sends.itertuples():
+        if s.join not in crag_of.index:
+            continue
+        c = crag_of.loc[s.join]
+        crag_id = c["id"]
+        hit = None
+        if s.boulder:
+            hit = full.get(f"{s.join}|{key(s.zone)}|{key(s.boulder)}")
+            if hit is None and len(by_name.get(f"{s.join}|{key(s.boulder)}", [])) == 1:
+                hit = by_name[f"{s.join}|{key(s.boulder)}"][0]
+            if hit is None:
+                not_in_tab.add((s.crag, s.zone, s.boulder))
+        zone = s.zone or (bl.loc[hit, "zone"] if hit is not None else "")
+
+        zid = None
+        if zone:
+            zk = f"{s.join}|{key(zone)}"
+            zid = slug(crag_id, zone)
+            if zid not in zones:
+                src = zone_pin if zk in zone_pin.index else zone_avg if zk in zone_avg.index else None
+                lat, lon, pos = ((src.loc[zk, "lat"], src.loc[zk, "lon"], "gps") if src is not None
+                                 else (c["lat"], c["lon"], "crag"))
+                zones[zid] = dict(id=zid, crag_id=crag_id, name=zone,
+                                  lat=round(float(lat), 6), lon=round(float(lon), 6), pos=pos)
+        bid = None
+        if s.boulder:
+            bid = slug(crag_id, zone, s.boulder)
+            if bid not in boulders:
+                r = bl.loc[hit] if hit is not None else None
+                if r is not None and pd.notna(r["lat"]):
+                    lat, lon, pos = r["lat"], r["lon"], "gps"
+                elif zid and zones[zid]["pos"] == "gps":
+                    lat, lon, pos = zones[zid]["lat"], zones[zid]["lon"], "zone"
+                else:
+                    lat, lon, pos = c["lat"], c["lon"], "crag"
+                boulders[bid] = dict(id=bid, crag_id=crag_id, zone_id=zid, zone=zone or None,
+                                     subzone=(r["subzone"] or None) if r is not None else None,
+                                     name=s.boulder, lat=round(float(lat), 6),
+                                     lon=round(float(lon), 6), pos=pos)
+        place[s.Index] = (zid, bid)
+
+    if not_in_tab:
+        print(f"Note: {len(not_in_tab)} boulders aren't in Boulder Locations yet (shown at their "
+              f"zone or crag): {sorted(not_in_tab)[:12]}")
+    gps = sum(b["pos"] == "gps" for b in boulders.values())
+    print(f"Places: {len(zones)} zones, {len(boulders)} boulders ({gps} with coordinates)")
+    return list(zones.values()), list(boulders.values()), place
+
+
+def build(ticklist_raw, crags_raw, fetcher, out_path=C.OUT_PATH, boulders_raw=None):
     sends = sheet_io.clean_ticklist(ticklist_raw)
-    crags = sheet_io.clean_crags(crags_raw)
+    bl = sheet_io.clean_boulders(boulders_raw)
+    crags, bl = build_crags(sends, sheet_io.clean_crags(crags_raw), bl)
     crags["id"] = [slug(r.country, r.state, r.crag) for r in crags.itertuples()]
     crags["source"] = [pick_source(r.country, r.lon, r.lat) for r in crags.itertuples()]
-
     sends = sends.merge(crags[["join", "id", "country"]], on="join", how="left")
-    missing = sends[sends["id"].isna()]
-    if len(missing):
-        pairs = sorted(set(zip(missing["crag"], missing["state"])))
-        print(f"WARNING: {len(missing)} sends have no Crag Locations row: {pairs}")
 
     var_meta = {v["key"]: v for v in C.VARIABLES}
     crag_out, climate = [], {}
@@ -182,7 +310,7 @@ def build(ticklist_raw, crags_raw, fetcher, out_path=C.OUT_PATH):
         series = physics.correct_to_crag(daily, meta["z_grid"], meta["z_crag"])
         crag_out.append(dict(
             id=crag["id"], name=crag["crag"], state=crag["state"], country=crag["country"],
-            lat=crag["lat"], lon=crag["lon"], source=crag["source"],
+            lat=round(crag["lat"], 6), lon=round(crag["lon"], 6), pos=crag["pos"], source=crag["source"],
             z_crag=meta["z_crag"], z_grid=meta["z_grid"],
             dz=round(meta["z_grid"] - meta["z_crag"], 1), climate_through=meta["last_date"]))
 
@@ -208,6 +336,8 @@ def build(ticklist_raw, crags_raw, fetcher, out_path=C.OUT_PATH):
                 status="ok", source=crag["source"], values=values, pct=pct, typical=typical,
                 tmax_grid=clean_value(row["tmax_grid"]), tmin_grid=clean_value(row["tmin_grid"]))
 
+    zone_out, boulder_out, place = resolve_places(sends, crags, bl)
+
     # Placeholder dates (a whole trip logged on one day, or year-only Jan 1 entries) would give
     # every send that day's weather, so they're flagged and kept out of the conditions analysis.
     per_date = sends["date"].value_counts()
@@ -225,10 +355,12 @@ def build(ticklist_raw, crags_raw, fetcher, out_path=C.OUT_PATH):
         send_out.append(dict(
             id=sid, date=None if pd.isna(s.date) else s.date.strftime("%Y-%m-%d"),
             date_approx=bool(pd.notna(s.date) and s.date in approx),
-            name=s.name, grade=s.grade, stars=clean_value(s.stars, 0), style=s.style,
+            name=s.name, grade=int(s.grade), stars=clean_value(s.stars, 1), style=s.style,
             is_fa=bool(s.is_fa),
             sessions=clean_value(s.sessions, 0), points=clean_value(s.points, 1),
             crag_id=None if pd.isna(s.id) else s.id, crag=s.crag, state=s.state,
+            zone=s.zone or None, boulder=s.boulder or None,
+            zone_id=place.get(s.Index, (None, None))[0], boulder_id=place.get(s.Index, (None, None))[1],
             country=None if pd.isna(s.country) else s.country,
             climate=climate.get(s.Index, dict(status="no_location"))))
 
@@ -251,7 +383,8 @@ def build(ticklist_raw, crags_raw, fetcher, out_path=C.OUT_PATH):
         settings=dict(baseline=[C.BASELINE_START, C.BASELINE_END], window_days=C.WINDOW_DAYS,
                       rain_threshold_mm=C.RAIN_THRESHOLD_MM,
                       lapse_c_per_km=dict(tmax=C.LAPSE_TMAX, tmin=C.LAPSE_TMIN)),
-        variables=C.VARIABLES, crags=crag_out, sends=send_out, summary=summary)
+        variables=C.VARIABLES, crags=crag_out, zones=zone_out, boulders=boulder_out, sends=send_out,
+        summary=summary)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(doc, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     st = pd.Series([s["climate"]["status"] for s in send_out]).value_counts().to_dict()
@@ -263,13 +396,14 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ticklist-csv")
     ap.add_argument("--crags-csv")
+    ap.add_argument("--boulders-csv")
     ap.add_argument("--fake-climate", action="store_true")
     ap.add_argument("--out", default=str(C.OUT_PATH))
     a = ap.parse_args()
     if a.ticklist_csv:
-        t, c = sheet_io.load_from_csv(a.ticklist_csv, a.crags_csv)
+        t, c, bl = sheet_io.load_from_csv(a.ticklist_csv, a.crags_csv, a.boulders_csv)
     else:
-        t, c = sheet_io.load_from_sheet(os.environ["SHEET_ID"])
+        t, c, bl = sheet_io.load_from_sheet(os.environ["SHEET_ID"])
     from pathlib import Path
     out = Path(a.out)
     if a.fake_climate:      # keep made-up weather away from the real cache and website
@@ -279,7 +413,7 @@ def main():
         fetcher = FakeFetcher()
     else:
         fetcher = GEEFetcher()
-    build(t, c, fetcher, out)
+    build(t, c, fetcher, out, bl)
 
 
 if __name__ == "__main__":
