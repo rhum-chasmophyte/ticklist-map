@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<base target="_top">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  :root {
+    --paper: #FAFAF7;
+    --ink: #1C1E1A;
+    --line: #D8D6CF;
+    --spruce: #2F6B4F;
+    --spruce-dark: #24523D;
+    --muted: #6E6F68;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--paper); color: var(--ink);
+    font: 16px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+    padding: 16px 16px 96px;
+  }
+  h1 { font-size: 1.3rem; font-weight: 700; margin: 4px 0 18px; letter-spacing: -0.01em; }
+  label { display: block; font-size: 0.85rem; color: var(--muted); margin: 16px 0 5px; }
+  input[type=text], input[type=date], input[type=number], select, textarea {
+    width: 100%; font: inherit; color: var(--ink);
+    background: #fff; border: 1px solid var(--line); border-radius: 8px;
+    padding: 12px; min-height: 48px;
+  }
+  textarea { min-height: 72px; resize: vertical; }
+  input:focus, select:focus, textarea:focus, button:focus-visible {
+    outline: 2px solid var(--spruce); outline-offset: 1px;
+  }
+  .hidden { display: none !important; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip {
+    font: inherit; padding: 10px 14px; min-height: 44px;
+    background: #fff; border: 1px solid var(--line); border-radius: 999px;
+    color: var(--ink); cursor: pointer;
+  }
+  .chip[aria-pressed="true"] { background: var(--spruce); border-color: var(--spruce); color: #fff; }
+  .chip:disabled { opacity: .45; cursor: default; }
+  .newin { margin-top: 8px; }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
+  .hint { font-size: 0.8rem; color: var(--muted); margin-top: 4px; }
+  .placed { font-size: 0.85rem; color: var(--spruce); margin-top: 6px; }
+
+  /* boulder location picker */
+  .picker { margin-top: 12px; border: 1px solid var(--line); border-radius: 10px; background: #fff; overflow: hidden; }
+  .picker-head { padding: 10px 12px; font-size: 0.9rem; border-bottom: 1px solid var(--line); }
+  .picker-head b { font-weight: 600; }
+  #pickMap { height: 280px; background: #e8e6e0; }
+  .picker-tools { padding: 10px 12px; display: grid; gap: 8px; }
+  .picker-tools .btns { display: flex; gap: 8px; flex-wrap: wrap; }
+  .picker-tools button {
+    font: inherit; font-size: 0.9rem; padding: 8px 12px; min-height: 40px; border-radius: 8px;
+    border: 1px solid var(--line); background: var(--paper); color: var(--ink); cursor: pointer;
+  }
+  .picker-tools input { min-height: 40px; padding: 8px 10px; font-size: 0.95rem; }
+  #coordOut { font-size: 0.9rem; font-variant-numeric: tabular-nums; }
+  #coordOut.set { color: var(--spruce); font-weight: 600; }
+  #geoMsg { font-size: 0.8rem; color: #A33B2E; }
+
+  #submitBtn {
+    position: fixed; left: 16px; right: 16px; bottom: 16px; z-index: 1000;
+    font: inherit; font-weight: 700; color: #fff;
+    background: var(--spruce); border: 0; border-radius: 10px;
+    padding: 15px; min-height: 52px; cursor: pointer;
+  }
+  #submitBtn:active { background: var(--spruce-dark); }
+  #submitBtn:disabled { background: var(--muted); }
+  #toast {
+    position: fixed; left: 16px; right: 16px; bottom: 80px; z-index: 1000;
+    background: var(--ink); color: var(--paper);
+    padding: 12px 14px; border-radius: 8px; text-align: center;
+  }
+  .err { color: #A33B2E; font-size: 0.85rem; margin-top: 4px; }
+</style>
+</head>
+<body>
+<h1>Log a climb</h1>
+
+<label for="date">Date</label>
+<input type="date" id="date">
+
+<div class="row2">
+  <div>
+    <label for="nation">Nation</label>
+    <select id="nation" disabled><option>Loading…</option></select>
+    <input type="text" id="newNation" class="newin hidden" placeholder="Code, e.g. US" maxlength="3" autocapitalize="characters">
+  </div>
+  <div>
+    <label for="state">State / region</label>
+    <select id="state" disabled><option value="">Pick a nation</option></select>
+    <input type="text" id="newState" class="newin hidden" placeholder="New state or region">
+  </div>
+</div>
+
+<label for="crag">Crag</label>
+<select id="crag" disabled><option value="">Pick a state first</option></select>
+<input type="text" id="newCrag" class="newin hidden" placeholder="New crag name">
+
+<label for="zone">Zone</label>
+<select id="zone" disabled><option value="">Pick a crag first</option></select>
+<input type="text" id="newZone" class="newin hidden" placeholder="New zone name">
+
+<label for="boulder">Boulder</label>
+<select id="boulder" disabled><option value="">Pick a crag first</option></select>
+<input type="text" id="newBoulder" class="newin hidden" placeholder="New boulder name">
+<div id="placedNote" class="placed hidden"></div>
+
+<div id="picker" class="picker hidden">
+  <div class="picker-head">Where is <b id="pickName">this boulder</b>? <span class="hint">Optional. Tap the map, use your location, or paste coordinates.</span></div>
+  <div id="pickMap"></div>
+  <div class="picker-tools">
+    <div id="coordOut">No location set</div>
+    <div class="btns">
+      <button type="button" id="geoBtn">Use my location</button>
+      <button type="button" id="clearPin">Clear</button>
+    </div>
+    <input type="text" id="pasteCoords" placeholder="Paste lat, lon (e.g. 40.0074, -105.4110)" inputmode="decimal" autocomplete="off">
+    <div id="geoMsg" class="hidden"></div>
+  </div>
+</div>
+
+<label for="name">Problem name</label>
+<input type="text" id="name" autocomplete="off">
+<div id="nameErr" class="err hidden">Name is required.</div>
+
+<label>Grade</label>
+<div class="chips" id="gradeChips"></div>
+
+<label>Stars</label>
+<div class="chips" id="starChips"></div>
+<div class="hint">Tap ½ to add a half star.</div>
+
+<label>Style</label>
+<div class="chips" id="styleChips"></div>
+
+<label for="sessions">Sessions</label>
+<input type="number" id="sessions" min="1" step="1" inputmode="numeric">
+
+<label for="notes">Notes</label>
+<textarea id="notes"></textarea>
+
+<label for="beta">Beta</label>
+<textarea id="beta"></textarea>
+
+<button id="submitBtn" disabled>Log climb</button>
+<div id="toast" class="hidden"></div>
+
+<script>
+  const NEW = '__new__';
+  const $ = function (id) { return document.getElementById(id); };
+  const k = function (s) { return String(s || '').trim().toLowerCase(); };
+
+  // ---------- place tree: T[nation][state][crag] = { pin, zones: { zone: { boulder: [lat, lon] | null } } }
+  let T = {}, CRAG_PINS = {};
+  function addPlace(n, s, c, z, b, lat, lon) {
+    n = n || '?';
+    T[n] = T[n] || {}; T[n][s] = T[n][s] || {};
+    const crag = T[n][s][c] = T[n][s][c] || { zones: {} };
+    const zone = crag.zones[z || ''] = crag.zones[z || ''] || {};
+    if (b) {
+      const has = Object.prototype.hasOwnProperty.call(zone, b);
+      if (!has || (zone[b] === null && lat !== null && lat !== undefined)) zone[b] = (lat !== null && lat !== undefined) ? [lat, lon] : null;
+    }
+  }
+  const sortKeys = function (o) { return Object.keys(o || {}).filter(Boolean).sort(function (a, b) { return a.localeCompare(b); }); };
+
+  // ---------- chips ----------
+  let grade = '', stars = '', half = false;
+  const styles = new Set();
+  function makeChips(el, labels, values, onPick) {
+    labels.forEach(function (lab, i) {
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'chip'; b.textContent = lab; b.dataset.value = values[i];
+      b.setAttribute('aria-pressed', 'false');
+      b.onclick = function () { onPick(values[i], b, el); };
+      el.appendChild(b);
+    });
+  }
+  function singlePick(val, btn, row) {
+    const on = btn.getAttribute('aria-pressed') === 'true';
+    row.querySelectorAll('.chip').forEach(function (c) { if (!c.classList.contains('half')) c.setAttribute('aria-pressed', 'false'); });
+    if (!on) btn.setAttribute('aria-pressed', 'true');
+    return on ? '' : val;
+  }
+
+  const gradeLabels = ['Day log'], gradeValues = [''];
+  for (let v = 0; v <= 15; v++) { gradeLabels.push('V' + v); gradeValues.push(String(v)); }
+  makeChips($('gradeChips'), gradeLabels, gradeValues, function (v, b, row) { grade = singlePick(v, b, row); });
+
+  makeChips($('starChips'), ['0', '1', '2', '3', '4', '5'], ['0', '1', '2', '3', '4', '5'], function (v, b, row) {
+    stars = singlePick(v, b, row); syncHalf();
+  });
+  const halfBtn = document.createElement('button');
+  halfBtn.type = 'button'; halfBtn.className = 'chip half'; halfBtn.textContent = '+½';
+  halfBtn.setAttribute('aria-pressed', 'false');
+  halfBtn.onclick = function () { half = !half; syncHalf(); };
+  $('starChips').appendChild(halfBtn);
+  function syncHalf() {
+    const can = stars !== '' && stars !== '5';
+    if (!can) half = false;
+    halfBtn.disabled = !can;
+    halfBtn.setAttribute('aria-pressed', String(half));
+  }
+  syncHalf();
+  function starValue() { return stars === '' ? '' : String(Number(stars) + (half ? 0.5 : 0)); }
+
+  makeChips($('styleChips'), ['Flash', 'First Ascent', 'Second Go', 'Repetition'],
+    ['Flash', 'First Ascent', 'Second Go', 'Repetition'],
+    function (v, b) {
+      if (styles.has(v)) { styles.delete(v); b.setAttribute('aria-pressed', 'false'); }
+      else { styles.add(v); b.setAttribute('aria-pressed', 'true'); }
+    });
+
+  // ---------- cascading dropdowns: nation > state > crag > zone > boulder ----------
+  const LEVELS = ['nation', 'state', 'crag', 'zone', 'boulder'];
+  const NEW_LABEL = { nation: '+ New nation…', state: '+ New state…', crag: '+ New crag…', zone: '+ New zone…', boulder: '+ New boulder…' };
+  const NONE_LABEL = { zone: '— No zone / not sure —', boulder: '— Boulder not known —' };
+
+  function val(level) {
+    const sel = $(level);
+    if (sel.value !== NEW) return sel.value;
+    const t = $('new' + level[0].toUpperCase() + level.slice(1)).value.trim();
+    return level === 'nation' ? t.toUpperCase() : t;
+  }
+  function isNew(level) { return $(level).value === NEW; }
+  function node(level) {   // the tree node a level's options come from
+    const n = T[val('nation')] || {}, s = n[val('state')] || {}, c = s[val('crag')] || { zones: {} };
+    if (level === 'nation') return T;
+    if (level === 'state') return isNew('nation') ? {} : n;
+    if (level === 'crag') return (isNew('nation') || isNew('state')) ? {} : s;
+    if (level === 'zone') return (isNew('nation') || isNew('state') || isNew('crag')) ? {} : c.zones;
+    // boulders: those in the chosen zone; with "no zone", every boulder at the crag
+    if (isNew('zone')) return {};
+    if (val('zone')) return c.zones[val('zone')] || {};
+    const all = {};
+    Object.keys(c.zones).forEach(function (z) { Object.keys(c.zones[z]).forEach(function (b) { all[b] = c.zones[z][b]; }); });
+    return all;
+  }
+  function parentReady(level) {
+    const i = LEVELS.indexOf(level);
+    return i === 0 || !!val(LEVELS[i - 1]) || (level === 'boulder' && !!val('crag'));
+  }
+  function fill(level) {
+    const sel = $(level), prev = sel.value;
+    sel.innerHTML = '';
+    if (!parentReady(level)) {
+      sel.appendChild(new Option('Pick a ' + LEVELS[LEVELS.indexOf(level) - 1] + ' first', ''));
+      sel.disabled = true;
+    } else {
+      const opts = sortKeys(node(level));
+      if (NONE_LABEL[level]) sel.appendChild(new Option(NONE_LABEL[level], ''));
+      else sel.appendChild(new Option(opts.length ? 'Choose…' : 'None yet, add one', ''));
+      opts.forEach(function (o) { sel.appendChild(new Option(o, o)); });
+      sel.appendChild(new Option(NEW_LABEL[level], NEW));
+      sel.disabled = false;
+      if ([].some.call(sel.options, function (o) { return o.value === prev; })) sel.value = prev;
+    }
+    $('new' + level[0].toUpperCase() + level.slice(1)).classList.toggle('hidden', sel.value !== NEW);
+  }
+  function cascadeFrom(level) {
+    for (let i = LEVELS.indexOf(level) + 1; i < LEVELS.length; i++) { $(LEVELS[i]).value = ''; fill(LEVELS[i]); }
+    updatePicker();
+  }
+  LEVELS.forEach(function (level) {
+    $(level).addEventListener('change', function () {
+      $('new' + level[0].toUpperCase() + level.slice(1)).classList.toggle('hidden', $(level).value !== NEW);
+      if ($(level).value === NEW) $('new' + level[0].toUpperCase() + level.slice(1)).focus();
+      if (level === 'boulder') { adoptZone(); updatePicker(); return; }
+      cascadeFrom(level);
+    });
+    // typing a new name unlocks the levels below (keeping what's already chosen there)
+    $('new' + level[0].toUpperCase() + level.slice(1)).addEventListener('input', function () {
+      for (let i = LEVELS.indexOf(level) + 1; i < LEVELS.length; i++) fill(LEVELS[i]);
+      updatePicker();
+    });
+  });
+
+  // Picked an existing boulder with Zone left on "not sure": fill in the boulder's own zone
+  function adoptZone() {
+    const b = val('boulder');
+    if (!b || isNew('boulder') || val('zone') || isNew('zone')) return;
+    const crag = ((T[val('nation')] || {})[val('state')] || {})[val('crag')];
+    if (!crag) return;
+    const z = Object.keys(crag.zones).find(function (z) { return z && Object.prototype.hasOwnProperty.call(crag.zones[z], b); });
+    if (!z) return;
+    $('zone').value = z; fill('boulder'); $('boulder').value = b;
+  }
+
+  // ---------- boulder location picker ----------
+  let pmap = null, pin = null, refLayer = null, pick = null;   // pick = [lat, lon]
+  function boulderCoords() {
+    const b = val('boulder');
+    if (!b || isNew('boulder')) return null;
+    const nodeB = node('boulder');
+    return nodeB[b] || null;
+  }
+  function updatePicker() {
+    const b = val('boulder');
+    const known = boulderCoords();
+    const needs = !!b && !known;
+    $('picker').classList.toggle('hidden', !needs);
+    $('placedNote').classList.toggle('hidden', !known);
+    if (known) $('placedNote').textContent = '✓ ' + b + ' is already on the map';
+    if (!needs) return;
+    $('pickName').textContent = b;
+    ensureMap();
+    setTimeout(function () { pmap.invalidateSize(); centreMap(); }, 30);
+  }
+  function ensureMap() {
+    if (pmap || typeof L === 'undefined') return;
+    pmap = L.map('pickMap', { zoomControl: true, attributionControl: true });
+    const sat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+      { maxZoom: 19, attribution: 'Imagery © Esri, Maxar, Earthstar Geographics' });
+    const topo = L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
+      { maxZoom: 17, attribution: '© OpenStreetMap contributors, SRTM · © OpenTopoMap (CC-BY-SA)' });
+    sat.addTo(pmap);
+    L.control.layers({ Satellite: sat, Topo: topo }, null, { position: 'topright' }).addTo(pmap);
+    refLayer = L.layerGroup().addTo(pmap);
+    pmap.on('click', function (e) { setPin(e.latlng.lat, e.latlng.lng, false); });
+    pmap.setView([39.5, -98], 4);
+  }
+  // centre on the zone's boulders, else the crag's, else the crag pin
+  function centreMap() {
+    if (!pmap) return;
+    refLayer.clearLayers();
+    const crag = ((T[val('nation')] || {})[val('state')] || {})[val('crag')];
+    const pts = [], zonePts = [];
+    if (crag) Object.keys(crag.zones).forEach(function (z) {
+      Object.keys(crag.zones[z]).forEach(function (b) {
+        const p = crag.zones[z][b];
+        if (!p) return;
+        pts.push(p);
+        if (k(z) === k(val('zone'))) zonePts.push(p);
+        L.circleMarker(p, { radius: 5, color: '#fff', weight: 2, fillColor: '#2F6B4F', fillOpacity: 0.9 })
+          .bindTooltip(b + (z ? ' · ' + z : '')).addTo(refLayer);
+      });
+    });
+    if (pick) { pmap.setView(pick, Math.max(pmap.getZoom(), 16)); return; }
+    const use = zonePts.length ? zonePts : pts;
+    if (use.length > 1) pmap.fitBounds(use, { padding: [30, 30], maxZoom: 17 });
+    else if (use.length === 1) pmap.setView(use[0], 17);
+    else {
+      const p = CRAG_PINS[k(val('state')) + '|' + k(val('crag'))];
+      if (p) pmap.setView(p, 15);
+    }
+  }
+  function setPin(lat, lon, recentre) {
+    pick = [lat, lon];
+    if (!pin) {
+      pin = L.marker(pick, { draggable: true }).addTo(pmap);
+      pin.on('dragend', function () { const ll = pin.getLatLng(); setPin(ll.lat, ll.lng, false); });
+    } else pin.setLatLng(pick);
+    $('coordOut').textContent = '📍 ' + lat.toFixed(6) + ', ' + lon.toFixed(6) + '  (drag the pin to adjust)';
+    $('coordOut').classList.add('set');
+    if (recentre) pmap.setView(pick, Math.max(pmap.getZoom(), 17));
+  }
+  function clearPin() {
+    pick = null;
+    if (pin) { pmap.removeLayer(pin); pin = null; }
+    $('coordOut').textContent = 'No location set'; $('coordOut').classList.remove('set');
+    $('pasteCoords').value = '';
+  }
+  $('clearPin').onclick = clearPin;
+  $('pasteCoords').addEventListener('input', function () {
+    const m = this.value.match(/-?\d+(?:\.\d+)?/g);
+    if (!m || m.length < 2) return;
+    const lat = parseFloat(m[0]), lon = parseFloat(m[1]);
+    if (Math.abs(lat) > 90 || Math.abs(lon) > 180) return;
+    ensureMap(); setPin(lat, lon, true);
+  });
+  $('geoBtn').onclick = function () {
+    const msg = $('geoMsg');
+    msg.classList.add('hidden');
+    if (!navigator.geolocation) { showGeoError(); return; }
+    $('geoBtn').textContent = 'Locating…';
+    navigator.geolocation.getCurrentPosition(function (p) {
+      $('geoBtn').textContent = 'Use my location';
+      setPin(p.coords.latitude, p.coords.longitude, true);
+      $('coordOut').textContent += '  ±' + Math.round(p.coords.accuracy) + ' m';
+    }, function () { $('geoBtn').textContent = 'Use my location'; showGeoError(); },
+    { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 });
+  };
+  function showGeoError() {
+    $('geoMsg').textContent = "Your location isn't available here (the browser blocked it). Tap the map instead, or in Google Maps long-press the boulder, copy the coordinates and paste them above.";
+    $('geoMsg').classList.remove('hidden');
+  }
+
+  // ---------- load ----------
+  $('date').value = new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD local
+  google.script.run.withSuccessHandler(function (data) {
+    T = {};
+    (data.places || []).forEach(function (p) { addPlace(p[0], p[1], p[2], p[3], p[4], p[5], p[6]); });
+    CRAG_PINS = data.crags || {};
+    fill('nation');
+    if (Object.keys(T).length === 1) { $('nation').value = Object.keys(T)[0]; }
+    if (T.US) $('nation').value = 'US';
+    cascadeFrom('nation');
+    $('submitBtn').disabled = false;
+  }).withFailureHandler(function (e) {
+    toast('Could not load your places: ' + e.message);
+  }).getFormData();
+
+  // ---------- submit ----------
+  $('submitBtn').addEventListener('click', function () {
+    const name = $('name').value.trim();
+    $('nameErr').classList.toggle('hidden', !!name);
+    if (!name) { $('name').focus(); return; }
+    for (const level of ['nation', 'state', 'crag']) {
+      if (!val(level)) { (isNew(level) ? $('new' + level[0].toUpperCase() + level.slice(1)) : $(level)).focus(); toast('Choose a ' + level + ' first'); return; }
+    }
+    for (const level of ['zone', 'boulder']) {
+      if (isNew(level) && !val(level)) { $('new' + level[0].toUpperCase() + level.slice(1)).focus(); return; }
+    }
+    const entry = {
+      date: $('date').value, grade: grade, stars: starValue(), name: name,
+      nation: val('nation'), state: val('state'), crag: val('crag'), zone: val('zone'), boulder: val('boulder'),
+      lat: pick ? pick[0] : '', lon: pick ? pick[1] : '',
+      sessions: $('sessions').value.trim(), notes: $('notes').value.trim(), beta: $('beta').value.trim(),
+      style: Array.from(styles),
+    };
+
+    $('submitBtn').disabled = true;
+    $('submitBtn').textContent = 'Logging…';
+    google.script.run.withSuccessHandler(function (res) {
+      // remember new places (and the new pin) for the next entry this session
+      addPlace(entry.nation, entry.state, entry.crag, entry.zone, entry.boulder,
+        pick ? pick[0] : null, pick ? pick[1] : null);
+      // keep the place selected for rapid logging; clear the problem fields
+      fill('nation'); $('nation').value = entry.nation;
+      fill('state'); $('state').value = entry.state;
+      fill('crag'); $('crag').value = entry.crag;
+      fill('zone'); $('zone').value = entry.zone;
+      fill('boulder'); $('boulder').value = entry.boulder;
+      ['newNation', 'newState', 'newCrag', 'newZone', 'newBoulder'].forEach(function (id) { $(id).value = ''; $(id).classList.add('hidden'); });
+      clearPin(); updatePicker();
+      $('name').value = ''; $('sessions').value = ''; $('notes').value = ''; $('beta').value = '';
+      grade = ''; stars = ''; half = false; styles.clear();
+      document.querySelectorAll('.chip').forEach(function (c) { c.setAttribute('aria-pressed', 'false'); });
+      syncHalf();
+      $('submitBtn').disabled = false;
+      $('submitBtn').textContent = 'Log climb';
+      const extra = res && res.boulder === 'added' ? ' · ' + entry.boulder + ' added to Boulder Locations'
+        : res && res.boulder === 'placed' ? ' · ' + entry.boulder + ' coordinates saved' : '';
+      toast('Logged: ' + entry.name + extra);
+      window.scrollTo(0, 0);
+    }).withFailureHandler(function (e) {
+      $('submitBtn').disabled = false;
+      $('submitBtn').textContent = 'Log climb';
+      toast('Failed to log: ' + e.message);
+    }).submitEntry(entry);
+  });
+
+  let toastTimer;
+  function toast(msg) {
+    $('toast').textContent = msg;
+    $('toast').classList.remove('hidden');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { $('toast').classList.add('hidden'); }, 3500);
+  }
+</script>
+</body>
+</html>
