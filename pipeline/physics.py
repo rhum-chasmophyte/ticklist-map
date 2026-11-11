@@ -114,3 +114,4 @@ def ks_uniform_p(pcts):
     lam = (math.sqrt(n) + 0.12 + 0.11 / math.sqrt(n)) * d
     p = 2 * sum((-1) ** (k - 1) * math.exp(-2 * k * k * lam * lam) for k in range(1, 101))
     return round(min(max(p, 0.0), 1.0), 4)
+    
