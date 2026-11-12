@@ -1,0 +1,36 @@
+name: Conditions refresh
+
+on:
+  schedule:
+    - cron: "41 */6 * * *"     # every 6 hours (UTC), off the hour
+  workflow_dispatch:           # "Run workflow" button for an immediate refresh
+
+permissions:
+  contents: write
+
+# never runs at the same time as the nightly refresh (both save files to the repo)
+concurrency:
+  group: data-commits
+  cancel-in-progress: false
+
+jobs:
+  conditions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Score the forecast
+        run: python -m pipeline.conditions
+      - name: Commit if changed
+        run: |
+          git config user.name "ticklist-bot"
+          git config user.email "ticklist-bot@users.noreply.github.com"
+          git add docs/data/conditions.json
+          git diff --cached --quiet && exit 0
+          git commit -m "Conditions refresh"
+          git pull --rebase
+          git push
