@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>What Drives My Sends</title>
+<meta name="description" content="Which weather conditions separate my hard bouldering sends from comparable days at the same crag and season, overall and by climate region.">
+<link rel="stylesheet" href="drivers.css">
+<script>
+  (function () {
+    var q = new URLSearchParams(location.search), t = q.get("theme");
+    if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+  })();
+</script>
+</head>
+<body>
+<header class="top">
+  <div class="title">
+    <a class="back" href="../">← Ticklist map</a>
+    <h1>What drives my sends</h1>
+    <p class="sub">Each climbing day is compared with every other day at the same crag and time of year over 25 years.
+      The conditions that set send days apart show what to wait for, and they differ by region.</p>
+  </div>
+  <div class="controls" role="group" aria-label="Options">
+    <div class="seg" role="radiogroup" aria-label="Which sends">
+      <button type="button" data-mode="hard" aria-pressed="true">Hard sends weighted</button>
+      <button type="button" data-mode="all" aria-pressed="false">All sends equal</button>
+    </div>
+    <div class="seg small" role="radiogroup" aria-label="Temperature unit">
+      <button type="button" data-unit="F" aria-pressed="true">°F</button>
+      <button type="button" data-unit="C" aria-pressed="false">°C</button>
+    </div>
+  </div>
+  <dl class="stats" id="stats"></dl>
+</header>
+
+<main>
+  <section aria-labelledby="h-head">
+    <h2 id="h-head">The short version</h2>
+    <div class="cards" id="cards"></div>
+  </section>
+
+  <section aria-labelledby="h-rank">
+    <h2 id="h-rank">Which conditions matter most</h2>
+    <p class="lead">How often each condition alone picks the send day over a comparable day at the same crag and season,
+      tested on years the model didn't see. 50% is a coin flip. Lines show the 90% range.</p>
+    <div class="legend" id="rankLegend"></div>
+    <div id="rank" class="chartbox"></div>
+    <details class="table"><summary>Table view</summary><div id="rankTable"></div></details>
+  </section>
+
+  <section aria-labelledby="h-sweet">
+    <h2 id="h-sweet">Sweet spots</h2>
+    <p class="lead">Top: how likely a send is across each condition's usual range, relative to its best value (shaded band = within 80% of best).
+      Bottom: where send days actually fell compared with all available days.</p>
+    <div id="sweet" class="multi"></div>
+  </section>
+
+  <section aria-labelledby="h-where">
+    <h2 id="h-where">What matters where</h2>
+    <p class="lead">Crags are grouped into climate regions by their 25-year pattern of temperature, humidity and rain.
+      Each cell shows how often that condition picks the send day there; ↑ means send days ran higher than typical, ↓ lower.
+      Grey cells aren't clearly different from chance. Pick a region for its details.</p>
+    <div class="legend" id="matrixLegend"></div>
+    <div id="matrix" class="matrixbox"></div>
+    <div id="regionDetail" class="region"></div>
+    <p class="note" id="smallRegions"></p>
+  </section>
+
+  <section aria-labelledby="h-method" class="method">
+    <h2 id="h-method">How this works</h2>
+    <div id="method"></div>
+  </section>
+</main>
+<footer class="foot" id="foot"></footer>
+<div class="tip" id="tip" role="tooltip" hidden></div>
+<script src="drivers.js"></script>
+</body>
+</html>
