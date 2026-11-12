@@ -329,6 +329,32 @@ How the analysis works:
 To link it from your portfolio, use the page address directly, or embed it in Weebly with an iframe
 like the map (it's a scrolling page, so a tall frame, around 2400 px, or a plain link works best).
 
+## Part 8 — "Send conditions now" scoreboard
+
+A third page at `https://<username>.github.io/ticklist-map/conditions/` (files in `docs/conditions/`),
+built from `docs/data/conditions.json` by its own workflow, **Conditions refresh**, every 6 hours.
+It needs no secrets: forecasts come from [Open-Meteo](https://open-meteo.com/) (free for
+non-commercial use, no key, CC BY 4.0), and it reuses the weather cache and `drivers.json`.
+
+After pushing, run it once by hand: **Actions → Conditions refresh → Run workflow**. Until then the
+page says it couldn't load the conditions.
+
+How each crag is scored (`pipeline/conditions.py`):
+
+1. Hourly forecast for the past 2 weeks and next 7 days at the crag, at its weather-grid elevation,
+   rolled up to daily highs/lows, dewpoint, rain, wind and sun.
+2. **Calibration:** on days covered by both the forecast and gridMET/ERA5, the average difference
+   for each variable is removed (capped, and only with 5+ overlapping days).
+3. The same lapse-rate correction and derived measures as the analysis, then the crag's **regional
+   model** from `drivers.json` (the overall model for regions without enough days).
+4. **Score** = percentile against the crag's days within ±15 days of the date, 2001–2025.
+   50 is typical; 95+ is ⚡ prime.
+5. **In season** = climbed at that crag within ±6 weeks of the date in any year (crags with fewer
+   than 3 climbing days use their region). Out-of-season crags are listed separately.
+
+Settings (prime threshold, season window, calibration limits) are at the top of `pipeline/conditions.py`.
+The two workflows never run at the same time, and each pulls before saving, so they can't collide.
+
 ## Reference
 
 ### Sheet columns this reads
@@ -373,6 +399,8 @@ that centre stays in the same weather grid cell; otherwise only that crag is re-
 | `docs/` | The website: `index.html`, `app.js` (map, panels, charts), `style.css`. `docs/data/sends.json` is the data it loads |
 | `docs/drivers/` | The "What drives my sends" page; loads `docs/data/drivers.json` |
 | `pipeline/drivers.py` | The send-conditions analysis behind that page |
+| `docs/conditions/`, `pipeline/conditions.py` | The live scoreboard and the forecast scoring behind it |
+| `.github/workflows/conditions.yml` | The 6-hourly conditions refresh |
 | `apps-script/` | The logging form (`Code.gs`, `Index.html`), pasted into the Sheet's Apps Script editor |
 | `.gitignore` | Stops key files and CSV exports from being uploaded |
 
