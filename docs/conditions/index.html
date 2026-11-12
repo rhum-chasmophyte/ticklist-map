@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Send Conditions Now</title>
+<meta name="description" content="A live scoreboard of bouldering conditions at my crags for the next week, scored by what has mattered for my hard sends in each region.">
+<link rel="stylesheet" href="conditions.css">
+<script>
+  (function () {
+    var t = new URLSearchParams(location.search).get("theme");
+    if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+  })();
+</script>
+</head>
+<body>
+<header class="top">
+  <div class="title">
+    <nav class="links"><a href="../">← Ticklist map</a><a href="../drivers/">What drives my sends</a></nav>
+    <h1>Send conditions now</h1>
+    <p class="sub">The week ahead at every crag I climb, scored by what has mattered for my hard sends in that region.
+      50 is a typical day for that crag and time of year; 95 and up is <b>⚡ prime</b>.</p>
+  </div>
+  <div class="controls" role="group" aria-label="Options">
+    <div class="seg" role="radiogroup" aria-label="Rank by">
+      <button type="button" data-rank="today" aria-pressed="true">Today</button>
+      <button type="button" data-rank="next3" aria-pressed="false">Best of next 3 days</button>
+    </div>
+    <select id="region" aria-label="Region"><option value="">All regions</option></select>
+    <div class="seg small" role="radiogroup" aria-label="Temperature unit">
+      <button type="button" data-unit="F" aria-pressed="true">°F</button>
+      <button type="button" data-unit="C" aria-pressed="false">°C</button>
+    </div>
+  </div>
+  <dl class="stats" id="stats"></dl>
+</header>
+
+<main>
+  <section id="primeWrap" aria-labelledby="h-prime">
+    <h2 id="h-prime">⚡ Prime windows</h2>
+    <div class="cards" id="prime"></div>
+  </section>
+
+  <section aria-labelledby="h-board">
+    <h2 id="h-board">Scoreboard</h2>
+    <p class="lead" id="boardLead"></p>
+    <div class="scale" id="scale"></div>
+    <div class="board" id="board" role="table" aria-label="Crags ranked by send conditions"></div>
+    <details class="offseason" id="offWrap"><summary id="offSum"></summary><div class="board" id="off"></div></details>
+  </section>
+
+  <section aria-labelledby="h-method" class="method">
+    <h2 id="h-method">How the scores work</h2>
+    <div id="method"></div>
+  </section>
+</main>
+<footer class="foot" id="foot"></footer>
+<script src="conditions.js"></script>
+</body>
+</html>
