@@ -23,10 +23,14 @@ jobs:
           GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
           SHEET_ID: ${{ secrets.SHEET_ID }}
         run: python -m pipeline.build
+      - name: Analyse what drives sends
+        # a failure here never blocks the map's data from being saved
+        continue-on-error: true
+        run: python -m pipeline.drivers
       - name: Commit if changed
         run: |
           git config user.name "ticklist-bot"
           git config user.email "ticklist-bot@users.noreply.github.com"
-          git add docs/data/sends.json cache/
+          git add docs/data/sends.json docs/data/drivers.json cache/ 2>/dev/null || git add docs/data/sends.json cache/
           git diff --cached --quiet || git commit -m "Nightly data refresh"
           git push
