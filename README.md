@@ -306,6 +306,29 @@ What the form does now:
 If **Use my location** says the browser blocked it, your phone or Google's page settings aren't
 sharing location with the form; tapping the map or pasting coordinates always works.
 
+## Part 7 — "What drives my sends" page
+
+A second page at `https://<username>.github.io/ticklist-map/drivers/` (files in `docs/drivers/`),
+built from `docs/data/drivers.json`. The nightly run creates that file after the map data
+(`python -m pipeline.drivers`, about a minute). If that step ever fails, the map still updates.
+
+How the analysis works:
+
+- **Used vs. available.** Each climbing day (crag + date with a send) is compared with every other
+  day at that crag within ±15 days of the same date, 2001–2025. A weighted conditional logistic
+  regression (one matched set per climbing day) finds which conditions set send days apart.
+- **Hard sends weighted.** A climbing day's weight is 2^(hardest grade − my level), capped at 1, where
+  my level is the 90th-percentile grade of the previous two years. A send at my level counts fully,
+  one grade below counts half. The page can switch to "all sends equal" for comparison.
+- **Scores** are leave-one-year-out concordance (how often the send day out-scores a comparable day;
+  50% = chance) with 90% bootstrap ranges over whole years.
+- **Climate regions:** crags are clustered (Ward) on 25-year monthly temperature, dewpoint and rain.
+  Regions with 25+ climbing days get their own results, pulled toward the overall ones when data are thin.
+- Settings are at the top of `pipeline/drivers.py` (weighting, region size, which conditions are tested).
+
+To link it from your portfolio, use the page address directly, or embed it in Weebly with an iframe
+like the map (it's a scrolling page, so a tall frame, around 2400 px, or a plain link works best).
+
 ## Reference
 
 ### Sheet columns this reads
@@ -348,6 +371,8 @@ that centre stays in the same weather grid cell; otherwise only that crag is re-
 | `.github/workflows/nightly.yml` | The nightly robot's instructions |
 | `cache/` | Saved daily weather per crag, so each night only fetches new days |
 | `docs/` | The website: `index.html`, `app.js` (map, panels, charts), `style.css`. `docs/data/sends.json` is the data it loads |
+| `docs/drivers/` | The "What drives my sends" page; loads `docs/data/drivers.json` |
+| `pipeline/drivers.py` | The send-conditions analysis behind that page |
 | `apps-script/` | The logging form (`Code.gs`, `Index.html`), pasted into the Sheet's Apps Script editor |
 | `.gitignore` | Stops key files and CSV exports from being uploaded |
 
