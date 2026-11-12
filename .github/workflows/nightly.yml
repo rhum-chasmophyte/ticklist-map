@@ -8,6 +8,11 @@ on:
 permissions:
   contents: write
 
+# never runs at the same time as the conditions refresh (both save files to the repo)
+concurrency:
+  group: data-commits
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -32,5 +37,7 @@ jobs:
           git config user.name "ticklist-bot"
           git config user.email "ticklist-bot@users.noreply.github.com"
           git add docs/data/sends.json docs/data/drivers.json cache/ 2>/dev/null || git add docs/data/sends.json cache/
-          git diff --cached --quiet || git commit -m "Nightly data refresh"
+          git diff --cached --quiet && exit 0
+          git commit -m "Nightly data refresh"
+          git pull --rebase
           git push
