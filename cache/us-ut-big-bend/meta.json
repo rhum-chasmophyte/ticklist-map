@@ -1,12 +1,12 @@
 {
- "lat": 38.65071,
- "lon": -109.48486,
+ "lat": 38.65068,
+ "lon": -109.48483,
  "source": "gridmet",
  "sample_lon": -109.48478515,
  "sample_lat": 38.65084625,
  "elev_m": null,
  "radius_m": null,
- "pts_hash": "b3426d26ab",
+ "pts_hash": "3b50b99d71",
  "z_grid": 1440.2,
  "cell": [
   -109.50561833361479,
